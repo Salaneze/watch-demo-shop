@@ -17,6 +17,8 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from bot.config import settings
+
 # Правила: путь (по началу строки) -> (сколько запросов, за сколько секунд).
 # Оформление заказа строже всего: это конец воронки, туда незачем ломиться часто.
 RULES: list[tuple[str, int, int]] = [
@@ -77,11 +79,16 @@ def client_key(request: Request) -> str:
 
     За туннелем и обратным прокси реальный адрес приходит заголовком, а
     `request.client` показывает сам прокси. Заголовку верим только когда
-    подключение действительно пришло с локального адреса — иначе его подставит
+    подключение действительно пришло с локального адреса либо когда мы явно
+    объявлены стоящими за прокси (`TRUST_PROXY=true`) — иначе его подставит
     кто угодно и обойдёт ограничитель, меняя значение на каждый запрос.
+
+    Без этого флага на хостинге всё наоборот: прокси приходит с внутреннего
+    адреса, заголовок игнорируется, и все посетители попадают в общую корзину —
+    один активный покупатель начинает упираться в лимит за всех остальных.
     """
     direct = request.client.host if request.client else "?"
-    if direct in {"127.0.0.1", "::1", "localhost"}:
+    if settings.trust_proxy or direct in {"127.0.0.1", "::1", "localhost"}:
         forwarded = (
             request.headers.get("cf-connecting-ip")
             or request.headers.get("x-forwarded-for", "").split(",")[0].strip()

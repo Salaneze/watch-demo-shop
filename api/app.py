@@ -1,12 +1,18 @@
 """Веб-приложение витрины: API + статика + живой бот в том же процессе.
 
 Один процесс вместо двух сервисов — клиенту разворачивать нечего, кроме одного
-контейнера. Бот здесь на polling: webhook появится вместе с боевым доменом.
+контейнера.
+
+Бот работает в одном из двух режимов. Локально — long-polling: он не требует
+публичного адреса. На хостинге — webhook (`USE_WEBHOOK=true`): бесплатные тарифы
+усыпляют контейнер, когда в него не приходят HTTP-запросы, и уснувший polling
+молча перестаёт забирать апдейты, а входящий webhook процесс будит.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import logging
 from pathlib import Path
 
@@ -14,8 +20,9 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from aiogram.types import Update
+from fastapi import FastAPI, Header, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.limits import LimitsMiddleware
@@ -52,26 +59,51 @@ async def lifespan(app: FastAPI):
     log.info(
         "Витрина поднята: @%s, http://%s:%s, публичный адрес: %s",
         me.username, settings.web_host, settings.web_port,
-        settings.webapp_url or "не задан (кнопки Mini App не будет)",
+        settings.public_url or "не задан (кнопки Mini App не будет)",
     )
 
     app.state.bot = bot
     # Нужен для ссылки входа t.me/<username>?start=... у клиентов без initData.
     app.state.bot_username = me.username
+    app.state.dp = dp
 
     async def notify(order: Order) -> None:
         await notify_admins_new_order(bot, order, source="витрина")
 
     app.state.notify_admins = notify
 
-    await bot.delete_webhook(drop_pending_updates=True)
-    polling = asyncio.create_task(dp.start_polling(bot))
+    webhook = settings.use_webhook and settings.has_webapp
+    if settings.use_webhook and not settings.has_webapp:
+        # Молча свалиться в polling нельзя: на спящем хостинге это выглядит как
+        # «бот иногда не отвечает», и причину ищут в коде обработчиков.
+        raise RuntimeError(
+            "USE_WEBHOOK=true, но публичный HTTPS-адрес не определён: "
+            "задайте WEBAPP_URL (на Render он приходит из RENDER_EXTERNAL_URL)"
+        )
+
+    polling: asyncio.Task | None = None
+    if webhook:
+        url = settings.public_url + settings.webhook_path
+        await bot.set_webhook(
+            url=url,
+            secret_token=settings.webhook_secret,
+            drop_pending_updates=True,
+            allowed_updates=dp.resolve_used_update_types(),
+        )
+        # Путь в лог не пишем целиком: он и есть половина секрета.
+        log.info("Режим webhook: %s/tg/***", settings.public_url)
+    else:
+        await bot.delete_webhook(drop_pending_updates=True)
+        polling = asyncio.create_task(dp.start_polling(bot))
+        log.info("Режим long-polling")
+
     try:
         yield
     finally:
-        polling.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await polling
+        if polling is not None:
+            polling.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await polling
         await bot.session.close()
 
 
@@ -79,6 +111,24 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Watch Demo Mini App", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.add_middleware(LimitsMiddleware)
     app.include_router(router)
+
+    # Приём апдейтов Telegram. Путь секретный и выведен из токена, плюс Telegram
+    # присылает согласованный заголовок — проверяем оба: путь может осесть в
+    # логах прокси, заголовок туда не попадает.
+    @app.post(settings.webhook_path, include_in_schema=False)
+    async def telegram_webhook(
+        request: Request,
+        secret: str = Header("", alias="X-Telegram-Bot-Api-Secret-Token"),
+    ) -> JSONResponse:
+        if not hmac.compare_digest(secret, settings.webhook_secret):
+            log.warning("Апдейт с неверным секретом отброшен")
+            return JSONResponse({"ok": False}, status_code=403)
+
+        bot = request.app.state.bot
+        dp = request.app.state.dp
+        update = Update.model_validate(await request.json(), context={"bot": bot})
+        await dp.feed_update(bot, update)
+        return JSONResponse({"ok": True})
 
     if WEBAPP_DIR.exists():
         @app.get("/", include_in_schema=False)

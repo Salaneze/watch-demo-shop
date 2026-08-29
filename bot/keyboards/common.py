@@ -20,7 +20,7 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     if settings.has_webapp:
         rows.append([KeyboardButton(
             text="🛍 Открыть витрину",
-            web_app=WebAppInfo(url=settings.webapp_url),
+            web_app=WebAppInfo(url=settings.public_url),
         )])
     rows += [
         [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🛒 Корзина")],

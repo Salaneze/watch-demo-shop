@@ -1,0 +1,37 @@
+# Описание сервиса для Render. Лежит в репозитории, чтобы разворачивание
+# повторялось один в один и не собиралось кликами в панели заново.
+#
+# Секреты сюда не пишем: BOT_TOKEN и PAYMENT_DETAILS помечены sync:false —
+# Render спросит их при создании сервиса и сохранит у себя.
+services:
+  - type: web
+    name: watch-demo-shop
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # Порт берётся из PORT, который подставляет платформа.
+    startCommand: python -m api
+    healthCheckPath: /api/catalog
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: BOT_TOKEN
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: PAYMENT_DETAILS
+        sync: false
+      # Бесплатный тариф усыпляет контейнер без входящих запросов — на polling
+      # бот в этот момент глохнет, webhook его будит.
+      - key: USE_WEBHOOK
+        value: "true"
+      # За прокси Render: разрешает верить заголовку с реальным IP и слушать
+      # 0.0.0.0. Без этого все посетители делят одну корзину лимитов.
+      - key: TRUST_PROXY
+        value: "true"
+      - key: SEED
+        value: shop
+      - key: CURRENCY
+        value: USD
+      # WEBAPP_URL не задаём: адрес придёт из RENDER_EXTERNAL_URL, который
+      # платформа подставляет сама — дублировать домен руками незачем.
