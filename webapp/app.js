@@ -1,5 +1,5 @@
 /* Витрина Watch Demo.
-   Без сборки и фреймворков: три экрана не стоят npm в Python-проекте.
+   Без сборки и фреймворков: пять экранов не стоят npm в Python-проекте.
    Разметка строится через createElement, а не innerHTML — названия товаров вводит
    админ, и один <img onerror> в названии превратил бы витрину в чужую площадку. */
 
@@ -13,9 +13,18 @@ const state = {
   orders: null,
   activeCategory: null,
   product: null,
+  gallery: 0,                 // текущий кадр на карточке товара
+  query: '',
+  sort: 'default',
+  favorites: new Set(),       // id товаров с сердечком
+  onlyFavorites: false,
+  delivery: null,             // выбранный код способа доставки
+  deliveryOptions: [],
+  promo: null,                // ответ /api/promo по последнему введённому коду
+  promoInput: '',
   form: { name: '', phone: '', address: '', comment: '' },
   error: '',
-  session: '',      // сессия для клиентов без initData
+  session: '',                // сессия для клиентов без initData
   authorized: false,
 };
 
@@ -43,6 +52,15 @@ function thumb(url, cls) {
   return url
     ? el('img', { class: cls, src: url, loading: 'lazy', alt: '' })
     : el('div', { class: `${cls} thumb--empty`, text: '⌚' });
+}
+
+/* Текст про остаток. -1 — считать штуки магазин не просил, тогда молчим:
+   «в наличии» на товаре без учёта склада обещает то, чего никто не проверял. */
+function stockNote(stock) {
+  if (stock < 0) return null;
+  if (stock === 0) return { text: 'Нет в наличии', low: true };
+  if (stock <= 3) return { text: `Осталось ${stock} шт.`, low: true };
+  return { text: `В наличии: ${stock} шт.`, low: false };
 }
 
 /* ---------- обращение к API ---------- */
@@ -89,6 +107,14 @@ async function api(path, options = {}) {
   return res.json();
 }
 
+function catalogUrl() {
+  const params = new URLSearchParams();
+  if (state.query.trim()) params.set('q', state.query.trim());
+  if (state.sort !== 'default') params.set('sort', state.sort);
+  const qs = params.toString();
+  return qs ? `/catalog?${qs}` : '/catalog';
+}
+
 /* ---------- нижняя кнопка Telegram ---------- */
 
 let mainHandler = null;
@@ -113,14 +139,147 @@ function go(screen) {
   window.scrollTo(0, 0);
 }
 
+/* ---------- поиск и сортировка ---------- */
+
+/* Поле поиска живёт одним и тем же узлом между перерисовками. Пересоздавать его
+   нельзя: на iOS новый input теряет фокус и закрывает клавиатуру на первом же
+   набранном символе. */
+let searchNode = null;
+let searchTimer = null;
+
+function searchField() {
+  if (!searchNode) {
+    searchNode = el('input', {
+      class: 'search',
+      type: 'search',
+      placeholder: 'Поиск по каталогу',
+      value: state.query,
+      oninput: (e) => {
+        state.query = e.target.value;
+        // Ждём паузы в наборе: запрос на каждую букву — это десять лишних
+        // обращений к серверу ради одного слова.
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(reloadCatalog, 300);
+      },
+    });
+  }
+  return searchNode;
+}
+
+const SORTS = [
+  { key: 'default', label: 'по умолчанию' },
+  { key: 'price_asc', label: 'сначала дешёвые' },
+  { key: 'price_desc', label: 'сначала дорогие' },
+  { key: 'title', label: 'по названию' },
+];
+
+async function reloadCatalog() {
+  try {
+    state.catalog = await api(catalogUrl());
+    state.error = '';
+  } catch (e) {
+    state.error = e.message;
+  }
+  render();
+}
+
+async function toggleFavorite(product) {
+  if (!state.authorized) { startLogin(); return; }
+  haptic();
+  try {
+    const res = await api('/favorites', {
+      method: 'POST',
+      body: JSON.stringify({ product_id: product.id }),
+    });
+    res.is_favorite ? state.favorites.add(product.id) : state.favorites.delete(product.id);
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
 /* ---------- экраны ---------- */
 
+function hero() {
+  return el('div', { class: 'hero' }, [
+    el('div', { class: 'hero-brand', text: 'NORDWIND' }),
+    el('div', { class: 'hero-tagline', text: 'МЕХАНИЧЕСКИЕ ЧАСЫ' }),
+  ]);
+}
+
+function filterBar() {
+  const sortIndex = SORTS.findIndex(s => s.key === state.sort);
+  return el('div', { class: 'filters' }, [
+    el('button', {
+      class: `chip${state.onlyFavorites ? ' chip--on' : ''}`,
+      text: `♡ Избранное${state.favorites.size ? ` · ${state.favorites.size}` : ''}`,
+      onclick: () => { state.onlyFavorites = !state.onlyFavorites; haptic(); render(); },
+    }),
+    el('button', {
+      class: 'chip',
+      text: `⇅ ${SORTS[sortIndex < 0 ? 0 : sortIndex].label}`,
+      // Переключатель по кругу, а не выпадающий список: вариантов четыре, а
+      // нативный <select> в webview выглядит чужеродно на обеих платформах.
+      onclick: () => {
+        state.sort = SORTS[(sortIndex + 1) % SORTS.length].key;
+        haptic();
+        reloadCatalog();
+      },
+    }),
+  ]);
+}
+
+function productCard(p) {
+  const inCart = new Map((state.cart?.lines || []).map(l => [l.product_id, l.qty]));
+  const qty = inCart.get(p.id);
+  const fav = state.favorites.has(p.id);
+  const note = stockNote(p.stock);
+
+  return el('div', { class: 'card-wrap' }, [
+    qty ? el('div', { class: 'badge', text: `${qty} шт` }) : null,
+    el('button', {
+      class: `heart${fav ? ' heart--on' : ''}`,
+      'aria-label': fav ? 'Убрать из избранного' : 'В избранное',
+      text: fav ? '♥' : '♡',
+      onclick: (e) => { e.stopPropagation(); toggleFavorite(p); },
+    }),
+    el('div', {
+      class: 'card',
+      onclick: () => { state.product = p; state.gallery = 0; go('product'); },
+    }, [
+      thumb(p.image, 'thumb'),
+      el('div', { class: 'card-body' }, [
+        el('div', { class: 'card-title', text: p.title }),
+        el('div', { class: 'card-price', text: p.price_text }),
+        note && note.low ? el('div', { class: 'card-stock', text: note.text }) : null,
+      ]),
+    ]),
+  ]);
+}
+
 function screenCatalog() {
-  const cats = state.catalog.categories.filter(c => c.products.length);
-  if (!cats.length) {
-    return [el('div', { class: 'empty' }, [el('span', { text: '📦' }),
-      el('div', { text: 'Витрина пока пуста' })])];
+  let cats = state.catalog.categories.filter(c => c.products.length);
+
+  if (state.onlyFavorites) {
+    // Фильтр по избранному считается на клиенте: сердечки уже загружены, а
+    // отдельный запрос ради подмножества того же каталога — лишний round-trip.
+    cats = cats
+      .map(c => ({ ...c, products: c.products.filter(p => state.favorites.has(p.id)) }))
+      .filter(c => c.products.length);
   }
+
+  const head = [hero(), searchField(), filterBar()];
+
+  if (!cats.length) {
+    setMain('', null);
+    const what = state.onlyFavorites ? 'Здесь пока пусто — отмечайте товары сердечком'
+      : state.query ? `По запросу «${state.query}» ничего не нашлось`
+      : 'Витрина пока пуста';
+    return [...head, el('div', { class: 'empty' }, [el('span', { text: '🔍' }),
+      el('div', { text: what })])];
+  }
+
   if (!cats.some(c => c.id === state.activeCategory)) state.activeCategory = cats[0].id;
   const active = cats.find(c => c.id === state.activeCategory);
 
@@ -132,38 +291,41 @@ function screenCatalog() {
       onclick: () => { state.activeCategory = c.id; haptic(); render(); },
     })));
 
-  const inCart = new Map((state.cart?.lines || []).map(l => [l.product_id, l.qty]));
-
-  const grid = el('div', { class: 'grid' }, active.products.map(p => {
-    const qty = inCart.get(p.id);
-    return el('div', { class: 'card-wrap' }, [
-      qty ? el('div', { class: 'badge', text: `${qty} шт` }) : null,
-      el('div', {
-        class: 'card',
-        onclick: () => { state.product = p; go('product'); },
-      }, [
-        thumb(p.image, 'thumb'),
-        el('div', { class: 'card-body' }, [
-          el('div', { class: 'card-title', text: p.title }),
-          el('div', { class: 'card-price', text: p.price_text }),
-        ]),
-      ]),
-    ]);
-  }));
+  const grid = el('div', { class: 'grid' }, active.products.map(productCard));
 
   const count = state.cart?.lines?.length || 0;
   setMain(count ? `Корзина · ${state.cart.total_text}` : '', count ? () => go('cart') : null);
-  return [tabs, grid];
+  return [...head, tabs, grid];
+}
+
+function gallery(p) {
+  const shots = p.images?.length ? p.images : (p.image ? [p.image] : []);
+  if (shots.length < 2) return thumb(shots[0] || null, 'hero-img');
+
+  const index = Math.min(state.gallery, shots.length - 1);
+  return el('div', { class: 'gallery' }, [
+    thumb(shots[index], 'hero-img'),
+    el('div', { class: 'dots' }, shots.map((_, i) =>
+      el('button', {
+        class: `dot${i === index ? ' dot--on' : ''}`,
+        'aria-label': `Фото ${i + 1}`,
+        onclick: () => { state.gallery = i; haptic(); render(); },
+      }))),
+  ]);
 }
 
 function screenProduct() {
   const p = state.product;
   const line = (state.cart?.lines || []).find(l => l.product_id === p.id);
+  const note = stockNote(p.stock);
+  const soldOut = p.stock === 0;
 
   if (!state.authorized) {
     // Смотреть товар можно без входа, класть в корзину — нет: корзина привязана
     // к человеку, а кто это, мы ещё не знаем.
     setMain('Войти, чтобы купить', startLogin);
+  } else if (soldOut) {
+    setMain('Нет в наличии', null);
   } else {
     setMain(line ? `В корзине · ${line.qty} шт` : 'Добавить в корзину', async () => {
       setMain('Добавляю…', null, { progress: true });
@@ -182,12 +344,26 @@ function screenProduct() {
     });
   }
 
+  const specs = (p.specs || []).length
+    ? el('div', { class: 'specs' }, p.specs.map(([k, v]) =>
+        el('div', { class: 'spec' }, [
+          el('span', { class: 'spec-key', text: k }),
+          el('span', { class: 'spec-val', text: v }),
+        ])))
+    : null;
+
   return [
-    thumb(p.image, 'hero'),
+    gallery(p),
     el('div', { class: 'detail' }, [
       el('h1', { text: p.title }),
       el('div', { class: 'price', text: p.price_text }),
+      note ? el('div', { class: `stock${note.low ? ' stock--low' : ''}`, text: note.text }) : null,
       p.description ? el('p', { text: p.description }) : null,
+      specs,
+      el('div', { class: 'fineprint' }, [
+        el('div', { text: 'Доставка по стране 2–5 дней · гарантия 24 месяца' }),
+        el('div', { text: 'Витрина-образец: товары вымышленные, деньги не списываются' }),
+      ]),
     ]),
   ];
 }
@@ -253,8 +429,52 @@ function checkoutValid() {
   return FIELDS.every(f => state.form[f.key].trim().length >= f.min);
 }
 
+function deliveryCost() {
+  const option = state.deliveryOptions.find(o => o.code === state.delivery);
+  return option ? option.cost : 0;
+}
+
+function promoDiscount() {
+  return state.promo?.valid ? state.promo.discount : 0;
+}
+
+/* Итог считается и здесь, и на сервере — и это не дублирование, а сверка:
+   именно эту сумму мы отправим в expected_total, и если сервер посчитает
+   иначе, заказ должен упасть, а не пройти по чужой цене. */
+function checkoutTotal() {
+  return (state.cart?.total || 0) - promoDiscount() + deliveryCost();
+}
+
+let promoNode = null;
+
+function promoField() {
+  if (!promoNode) {
+    promoNode = el('input', {
+      class: 'promo-input',
+      placeholder: 'ПРОМОКОД',
+      value: state.promoInput,
+      oninput: (e) => { state.promoInput = e.target.value; },
+    });
+  }
+  return promoNode;
+}
+
+async function applyPromo() {
+  haptic();
+  try {
+    state.promo = await api('/promo', {
+      method: 'POST',
+      body: JSON.stringify({ code: state.promoInput }),
+    });
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
 function screenCheckout() {
-  const nodes = FIELDS.map(f => {
+  const fields = FIELDS.map(f => {
     const input = el(f.key === 'comment' ? 'textarea' : 'input', {
       placeholder: f.placeholder,
       value: state.form[f.key],
@@ -269,8 +489,76 @@ function screenCheckout() {
     return el('div', { class: 'field' }, [el('label', { text: f.label }), input]);
   });
 
+  const options = el('div', { class: 'options' }, state.deliveryOptions.map(o =>
+    el('button', {
+      class: `option${o.code === state.delivery ? ' option--on' : ''}`,
+      onclick: () => { state.delivery = o.code; haptic(); render(); },
+    }, [
+      el('div', { class: 'option-main' }, [
+        el('div', { class: 'option-title', text: o.title }),
+        el('div', { class: 'option-note', text: o.note }),
+      ]),
+      el('div', { class: 'option-cost', text: o.cost ? o.cost_text : 'бесплатно' }),
+    ])));
+
+  const promo = el('div', { class: 'promo' }, [
+    promoField(),
+    el('button', { class: 'promo-apply', text: 'Применить', onclick: applyPromo }),
+  ]);
+
+  const sums = el('div', { class: 'sums' }, [
+    sumRow('Товары', state.cart?.total_text || ''),
+    state.promo?.valid
+      ? sumRow(`Скидка · ${state.promo.code}`, `−${state.promo.discount_text}`)
+      : null,
+    sumRow(`Доставка · ${deliveryTitle()}`, deliveryCost()
+      ? state.deliveryOptions.find(o => o.code === state.delivery).cost_text
+      : 'бесплатно'),
+    el('div', { class: 'sum-row sum-row--total' }, [
+      el('span', { text: 'К ОПЛАТЕ' }),
+      el('span', { text: formatMoneyLike(checkoutTotal()) }),
+    ]),
+  ]);
+
   syncCheckoutButton();
-  return [el('div', { class: 'section-title', text: 'Доставка' }), ...nodes];
+  return [
+    el('div', { class: 'section-title', text: 'Куда и кому' }),
+    ...fields,
+    el('div', { class: 'section-title', text: 'Доставка' }),
+    options,
+    el('div', { class: 'section-title', text: 'Промокод' }),
+    promo,
+    state.promo && !state.promo.valid
+      ? el('div', { class: 'notice notice--bad', text: state.promo.message })
+      : null,
+    sums,
+    el('div', { class: 'fineprint' },
+      [el('div', { text: 'Оплата по реквизитам после подтверждения заказа' })]),
+  ];
+}
+
+function deliveryTitle() {
+  return state.deliveryOptions.find(o => o.code === state.delivery)?.title || '—';
+}
+
+function sumRow(label, value) {
+  return el('div', { class: 'sum-row' }, [
+    el('span', { text: label }),
+    el('span', { text: value }),
+  ]);
+}
+
+/* Сервер присылает уже отформатированные суммы, но итог со скидкой и доставкой
+   складывается на клиенте. Формат берём с образца — из строки корзины, где тот
+   же символ валюты уже стоит на своём месте: у одних валют он спереди, у других
+   сзади, и угадывать это в вебе нам незачем. */
+function formatMoneyLike(value) {
+  const sample = state.cart?.total_text || '';
+  // Разделитель тысяч — неразрывный пробел, escape-последовательностью:
+  // сам символ в коде неотличим от обычного пробела и теряется при копировании.
+  const digits = String(value).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+  const match = sample.match(/^(\D*)[\d\s\u00a0]+(\D*)$/);
+  return match ? `${match[1]}${digits}${match[2]}` : digits;
 }
 
 function syncCheckoutButton() {
@@ -279,7 +567,7 @@ function syncCheckoutButton() {
     setMain('Заполните поля', null);
     return;
   }
-  setMain(`Заказать · ${state.cart.total_text}`, submitOrder);
+  setMain(`Заказать · ${formatMoneyLike(checkoutTotal())}`, submitOrder);
 }
 
 async function submitOrder() {
@@ -292,14 +580,21 @@ async function submitOrder() {
         phone: state.form.phone.trim(),
         address: state.form.address.trim(),
         comment: state.form.comment.trim(),
-        // Сумма, которую покупатель видит прямо сейчас. Если на сервере она уже
-        // другая (админ поменял цену), заказ не пройдёт — вместо тихого списания
-        // не той суммы вернёмся в корзину.
-        expected_total: state.cart.total,
+        // Сумма, которую покупатель видит прямо сейчас, вместе со скидкой и
+        // доставкой. Если на сервере она другая (админ поменял цену, промокод
+        // кончился), заказ не пройдёт — вместо тихого списания не той суммы
+        // вернёмся в корзину.
+        expected_total: checkoutTotal(),
+        // Только код способа и текст промокода: цены считает сервер.
+        delivery: state.delivery,
+        promo_code: state.promo?.valid ? state.promo.code : '',
       }),
     });
     state.lastOrder = order;
     state.cart = { lines: [], total: 0, total_text: '', removed: [] };
+    state.promo = null;
+    state.promoInput = '';
+    promoNode = null;
     tg?.HapticFeedback?.notificationOccurred('success');
     go('done');
   } catch (e) {
@@ -330,6 +625,10 @@ function screenDone() {
         el('span', { text: o.total_text }),
       ]),
       ...o.items.map(i => el('div', { class: 'order-line', text: `${i.title} — ${i.qty} шт` })),
+      o.discount ? el('div', { class: 'order-line', text: `Скидка ${o.promo_code} — −${o.discount_text}` }) : null,
+      o.delivery_cost
+        ? el('div', { class: 'order-line', text: `${o.delivery_title} — ${o.delivery_cost_text}` })
+        : el('div', { class: 'order-line', text: `${o.delivery_title} — бесплатно` }),
     ]),
   ];
 }
@@ -417,7 +716,6 @@ function screenLoginWaiting() {
 
 function screenLocked(message) {
   const noData = !tg?.initData;
-  const version = tg?.version ? `Mini Apps ${tg.version}` : 'клиент без поддержки Mini Apps';
 
   app.replaceChildren(el('div', { class: 'empty' }, [
     el('span', { text: noData ? '🧩' : '🔒' }),
@@ -430,16 +728,14 @@ function screenLocked(message) {
 
   if (noData) {
     app.append(el('div', { class: 'notice' }, [
-      'Так ведут себя модифицированные клиенты: витрина открывается, но магазин ' +
-      'не может понять, кто вы. Это чинится входом через бота — он подтвердит ' +
-      'вашу личность сам, вводить ничего не нужно.',
+      'Витрина открылась, но магазин не может понять, кто вы. Так бывает в разных ' +
+      'клиентах Telegram. Это чинится входом через бота — он подтвердит вашу ' +
+      'личность сам, вводить ничего не нужно.',
     ]));
     app.append(el('div', { class: 'notice' }, [
       'Каталог ниже доступен и без входа. Вход нужен для корзины и заказов. ' +
       'Ещё можно вернуться в чат — кнопки «Каталог» и «Корзина» работают там полностью.',
     ]));
-    app.append(el('div', { class: 'notice', text: `Определился как: ${version}` }));
-
     // Каталог показываем прямо здесь: смотреть товары можно и без входа.
     if (state.catalog) {
       app.append(el('div', { class: 'section-title', text: 'Каталог' }));
@@ -462,11 +758,19 @@ async function boot() {
   // Каталог открыт всем: даже без авторизации человек должен увидеть товары,
   // а не пустой экран с отказом.
   try {
-    state.catalog = await api('/catalog');
+    state.catalog = await api(catalogUrl());
   } catch (e) {
     screenLocked(e.message);
     return;
   }
+
+  // Способы доставки тоже публичны: цену доставки покупатель вправе видеть до входа.
+  try {
+    state.deliveryOptions = await api('/delivery');
+    if (!state.delivery && state.deliveryOptions.length) {
+      state.delivery = state.deliveryOptions[0].code;
+    }
+  } catch { /* без списка чекаут просто не покажет выбор */ }
 
   try {
     state.cart = await api('/cart');
@@ -479,6 +783,11 @@ async function boot() {
     screenLocked(e.message);
     return;
   }
+
+  try {
+    const favorites = await api('/favorites');
+    state.favorites = new Set(favorites.map(p => p.id));
+  } catch { /* сердечки — не повод не открыть магазин */ }
 
   const user = tg?.initDataUnsafe?.user;
   if (user) {

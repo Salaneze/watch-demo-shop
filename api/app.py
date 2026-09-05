@@ -130,6 +130,13 @@ def create_app() -> FastAPI:
         await dp.feed_update(bot, update)
         return JSONResponse({"ok": True})
 
+    # Health check платформы. Отдельный лёгкий путь: раньше Render дёргал
+    # `/api/catalog` каждые пять секунд, то есть тянул весь каталог из БД
+    # только чтобы убедиться, что процесс жив, и забивал этим логи.
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz() -> JSONResponse:
+        return JSONResponse({"ok": True})
+
     if WEBAPP_DIR.exists():
         @app.get("/", include_in_schema=False)
         async def index() -> FileResponse:

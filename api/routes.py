@@ -21,12 +21,17 @@ from api.schemas import (
     CartPatch,
     CatalogOut,
     CategoryOut,
+    DeliveryOut,
+    FavoriteOut,
+    FavoritePatch,
     LoginPoll,
     LoginStart,
     OrderIn,
     OrderItemOut,
     OrderOut,
     ProductOut,
+    PromoIn,
+    PromoOut,
 )
 from api.session import deep_link, issue_token, read_token
 from api.session import store as login_store
@@ -34,7 +39,14 @@ from bot.config import settings
 from bot.db import repo
 from bot.db.base import session_factory
 from bot.db.models import Product, status_ru
+from bot.utils.delivery import (
+    DELIVERY_OPTIONS,
+    delivery_option,
+    discount_for,
+    resolve_promo,
+)
 from bot.utils.money import fmt
+from bot.utils.seed import seed_art_path
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger(__name__)
@@ -91,11 +103,38 @@ CurrentUser = Annotated[WebAppUser, Depends(current_user)]
 Session = Annotated[AsyncSession, Depends(get_session)]
 
 
+def _image_version(file_id: str) -> str:
+    """Метка версии картинки для адреса.
+
+    Картинки отдаются с суточным Cache-Control, поэтому без метки замена фото
+    доходит до покупателя через сутки: адрес `/api/img/7` не изменился, и браузер
+    даже по Ctrl+Shift+R берёт старый файл из дискового кэша (проверено на живой
+    витрине). Для файла из Telegram достаточно самого file_id — новое фото
+    получает новый идентификатор. Для демо-рисунка идентификатор постоянный,
+    поэтому в метку идёт время изменения файла на диске.
+    """
+    art = seed_art_path(file_id)
+    stamp = f"{file_id}:{art.stat().st_mtime_ns}" if art is not None else file_id
+    return hashlib.sha1(stamp.encode()).hexdigest()[:8]
+
+
 def _image_url(p: Product) -> str | None:
-    return f"/api/img/{p.id}" if p.photo_file_id else None
+    if not p.photo_file_id:
+        return None
+    return f"/api/img/{p.id}?v={_image_version(p.photo_file_id)}"
 
 
-def _product_out(p: Product) -> ProductOut:
+def _image_urls(p: Product) -> list[str]:
+    """Адреса всех кадров галереи. Число в адресе — позиция в общем списке."""
+    if not p.photo_file_id:
+        return []
+    urls = [_image_url(p)]
+    for n, file_id in enumerate(p.extra_photos or [], start=1):
+        urls.append(f"/api/img/{p.id}/{n}?v={_image_version(file_id)}")
+    return urls
+
+
+def _product_out(p: Product, favorites: set[int] | None = None) -> ProductOut:
     return ProductOut(
         id=p.id,
         title=p.title,
@@ -103,7 +142,13 @@ def _product_out(p: Product) -> ProductOut:
         price=p.price,
         price_text=fmt(p.price),
         image=_image_url(p),
+        images=_image_urls(p),
         category_id=p.category_id,
+        stock=p.stock,
+        # У товаров, заведённых до появления характеристик, поля просто нет —
+        # карточка тогда обходится без таблицы, а не падает.
+        specs=[[str(k), str(v)] for k, v in (p.specs or [])],
+        is_favorite=bool(favorites and p.id in favorites),
     )
 
 
@@ -133,21 +178,77 @@ async def auth_poll(code: str) -> LoginPoll:
 
 
 @router.get("/catalog", response_model=CatalogOut)
-async def catalog(session: Session) -> CatalogOut:
+async def catalog(session: Session, q: str = "", sort: str = repo.DEFAULT_SORT) -> CatalogOut:
     """Каталог открыт без подписи намеренно.
 
     Товары и цены и так видит любой, кто написал боту, — секрета в них нет.
     Зато человек с модифицированным клиентом увидит витрину, а не экран отказа.
     Подпись требуется дальше: корзина, заказы и всё, что привязано к личности.
+
+    Поиск и сортировка идут сюда же параметрами: держать отдельный /search
+    значило бы дублировать сборку категорий ради одного `where`. Пустые
+    категории после фильтра не показываем — вкладка без товаров выглядит
+    поломкой, а не результатом поиска.
     """
+    if sort not in repo.SORT_ORDERS:
+        raise HTTPException(status_code=400, detail="Неизвестная сортировка")
+
     categories = await repo.active_categories(session)
     out = []
     for c in categories:
-        products = await repo.products_in_category(session, c.id)
+        products = await repo.products_in_category(session, c.id, query=q, sort=sort)
+        if not products and q:
+            continue
         out.append(
             CategoryOut(id=c.id, title=c.title, products=[_product_out(p) for p in products])
         )
     return CatalogOut(currency=settings.currency.upper(), categories=out)
+
+
+@router.get("/delivery", response_model=list[DeliveryOut])
+async def delivery_options() -> list[DeliveryOut]:
+    """Способы доставки с ценами. Витрина их только показывает — считает сервер."""
+    return [
+        DeliveryOut(code=o.code, title=o.title, note=o.note, cost=o.cost, cost_text=fmt(o.cost))
+        for o in DELIVERY_OPTIONS
+    ]
+
+
+@router.get("/favorites", response_model=list[ProductOut])
+async def favorites(user: CurrentUser, session: Session) -> list[ProductOut]:
+    ids = await repo.favorite_ids(session, user.id)
+    products = [await repo.product(session, pid) for pid in sorted(ids)]
+    # Товар мог быть снят с продажи, пока лежал в отложенных: показываем только живые,
+    # но запись не удаляем — вернут в продажу, и сердечко останется на месте.
+    return [_product_out(p, ids) for p in products if p is not None and p.is_active]
+
+
+@router.post("/favorites", response_model=FavoriteOut)
+async def favorite_toggle(patch: FavoritePatch, user: CurrentUser, session: Session) -> FavoriteOut:
+    product = await repo.product(session, patch.product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=404, detail="Товар больше не продаётся")
+    state = await repo.favorite_toggle(session, user.id, patch.product_id)
+    return FavoriteOut(product_id=patch.product_id, is_favorite=state)
+
+
+@router.post("/promo", response_model=PromoOut)
+async def check_promo(patch: PromoIn, user: CurrentUser, session: Session) -> PromoOut:
+    """Считает скидку для текущей корзины, ничего не меняя.
+
+    Ответ 200 и с недействительным кодом: «нет такого промокода» — это нормальный
+    исход проверки, а не ошибка запроса, и витрине проще показать текст из поля
+    message, чем разбирать коды ошибок.
+    """
+    promo = await resolve_promo(session, patch.code)
+    items_total = await repo.cart_total(session, user.id)
+    if promo is None:
+        return PromoOut(valid=False, code=patch.code.strip().upper(), percent=0,
+                        discount=0, discount_text=fmt(0),
+                        message="Такого промокода нет или он уже не действует")
+    discount = discount_for(items_total, promo)
+    return PromoOut(valid=True, code=promo.code, percent=promo.percent, discount=discount,
+                    discount_text=fmt(discount), message=f"Скидка {promo.percent}%")
 
 
 async def _cart_out(session: AsyncSession, user_id: int, removed: list[str]) -> CartOut:
@@ -192,10 +293,28 @@ async def cart_clear(user: CurrentUser, session: Session) -> CartOut:
 
 
 def _order_out(order) -> OrderOut:
+    # Заказы, оформленные до появления доставки, лежат в базе без разбивки:
+    # items_total у них 0, поэтому за сумму товаров берём общий итог.
+    items_total = order.items_total or order.total
+    try:
+        delivery_title = delivery_option(order.delivery_method).title
+    except ValueError:
+        # Способ доставки могли убрать из прайса уже после оформления — заказ
+        # от этого не перестал существовать, показываем как есть.
+        delivery_title = order.delivery_method
+
     return OrderOut(
         id=order.id,
         status=str(order.status),
         status_text=status_ru(order.status),
+        items_total=items_total,
+        items_total_text=fmt(items_total),
+        discount=order.discount,
+        discount_text=fmt(order.discount),
+        promo_code=order.promo_code,
+        delivery_title=delivery_title,
+        delivery_cost=order.delivery_cost,
+        delivery_cost_text=fmt(order.delivery_cost),
         total=order.total,
         total_text=fmt(order.total),
         created_at=order.created_at.isoformat(),
@@ -218,6 +337,8 @@ async def create_order(data: OrderIn, request: Request, user: CurrentUser,
         order = await repo.create_order(
             session, user.id, data.name, data.phone, data.address, data.comment,
             expected_total=data.expected_total,
+            delivery=data.delivery,
+            promo_code=data.promo_code,
         )
     except repo.CartChanged as exc:
         # 409: витрина покажет свежую корзину и попросит подтвердить заново.
@@ -237,8 +358,16 @@ async def my_orders(user: CurrentUser, session: Session) -> list[OrderOut]:
     return [_order_out(o) for o in orders]
 
 
+@router.get("/img/{product_id}/{index}")
+async def product_image_extra(product_id: int, index: int, request: Request,
+                              session: Session) -> FileResponse:
+    """Второй и следующие кадры галереи. Первый живёт по адресу без индекса."""
+    return await product_image(product_id, request, session, index=index)
+
+
 @router.get("/img/{product_id}")
-async def product_image(product_id: int, request: Request, session: Session) -> FileResponse:
+async def product_image(product_id: int, request: Request, session: Session,
+                        index: int = 0) -> FileResponse:
     """Отдаёт фото товара, скачивая его из Telegram один раз.
 
     В БД лежит `photo_file_id` — идентификатор внутри Telegram, в `<img src>` его не
@@ -253,16 +382,31 @@ async def product_image(product_id: int, request: Request, session: Session) -> 
     if product is None or not product.is_active or not product.photo_file_id:
         raise HTTPException(status_code=404, detail="Нет картинки")
 
+    # Индекс 0 — основное фото, дальше идут кадры галереи по порядку.
+    if index:
+        extra = product.extra_photos or []
+        if not 1 <= index <= len(extra):
+            raise HTTPException(status_code=404, detail="Нет картинки")
+        file_id = extra[index - 1]
+    else:
+        file_id = product.photo_file_id
+
+    # Демо-товары ссылаются на рисунок из репозитория, а не на файл в Telegram.
+    art = seed_art_path(file_id)
+    if art is not None:
+        return FileResponse(art, media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
     MEDIA_DIR.mkdir(exist_ok=True)
     # Имя от file_id: сменили фото товара — старый кэш не подсунется.
-    name = hashlib.sha1(product.photo_file_id.encode()).hexdigest()[:16] + ".jpg"
+    name = hashlib.sha1(file_id.encode()).hexdigest()[:16] + ".jpg"
     path = MEDIA_DIR / name
 
     if not path.exists():
         bot = getattr(request.app.state, "bot", None)
         if bot is None:
             raise HTTPException(status_code=503, detail="Загрузка картинок недоступна")
-        file = await bot.get_file(product.photo_file_id)
+        file = await bot.get_file(file_id)
         await bot.download_file(file.file_path, destination=path)
 
     return FileResponse(path, media_type="image/jpeg",

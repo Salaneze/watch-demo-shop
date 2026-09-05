@@ -9,10 +9,16 @@
 Механика бота одинаковая, отличается только контент.
 Бренды и товары вымышленные, совпадения с реальными марками не подразумеваются.
 """
+from pathlib import Path
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.db import repo
+
+# Рисунки демо-товаров. Генерируются `tools/gen_watch_art.py` и лежат в
+# репозитории — на хостинге ничего не рисуется, Pillow там не нужен.
+ART_DIR = Path("media/seed")
 
 # --- основная витрина: мемы спрятаны в названиях моделей ---
 SHOP = {
@@ -160,6 +166,126 @@ PLAIN = {
 
 CATALOGS = {"shop": SHOP, "plain": PLAIN}
 
+# Название товара → картинка из `media/seed/`. Отдельной картой, а не полем в
+# кортеже: демо-каталоги `shop` и `plain` зовут одни и те же модели по-разному,
+# а рисунок у них общий. Клиент, который заменит каталог своим, просто перестанет
+# попадать в эту карту — товары останутся без фото, ничего не сломается.
+#
+# В БД слаг ложится в `photo_file_id` с префиксом `seed:`: так демо-картинка и
+# настоящий файл из Telegram различимы одним полем, без миграции схемы.
+SEED_ART_PREFIX = "seed:"
+
+ART = {
+    # shop
+    "Ohio Diver 67": "diver",
+    "Nordwind Sigma 40": "meridian",
+    "Bombardiro Skeleton 41": "skeleton",
+    "Ohio Field 38 Grass": "field",
+    "Nordwind Aura 36": "sunburst",
+    "Kron Mid 36": "thin",
+    "Kron Nonchalant 39": "minimal",
+    "Nordwind Demure 34": "pearl",
+    "Ohio Chrono 42": "chrono",
+    "Lock In Set": "set",
+    # plain
+    "Nordwind Diver 300": "diver",
+    "Nordwind Meridian 40": "meridian",
+    "Kron Skeleton 41": "skeleton",
+    "Nordwind Field 38": "field",
+    "Nordwind Solaris 36": "sunburst",
+    "Kron Daily 36": "thin",
+    "Kron Essential 39": "minimal",
+    "Nordwind Aria 34": "pearl",
+    "Kron Chrono 42": "chrono",
+    "Starter Set": "set",
+    # общие для обоих каталогов
+    "Leather strap, 20 mm": "strap-leather",
+    "Milanese bracelet, 20 mm": "strap-milanese",
+    "NATO nylon, 20 mm": "strap-nato",
+}
+
+
+# Характеристики и остатки заданы по слагу картинки, а не по названию товара:
+# `shop` и `plain` зовут одну модель по-разному, но корпус у неё один. Так
+# таблица не дублируется и не разъезжается между двумя каталогами.
+SPECS = {
+    "diver": [["Movement", "automatic, NH35"], ["Case", "steel, 40 mm"],
+              ["Water resistance", "300 m"], ["Crystal", "sapphire"]],
+    "meridian": [["Movement", "in-house automatic"], ["Case", "titanium, 40 mm"],
+                 ["Dial", "matte anthracite"], ["Power reserve", "48 h"]],
+    "skeleton": [["Movement", "hand-wound skeleton"], ["Case", "steel, 41 mm"],
+                 ["Crystal", "sapphire, front and back"], ["Power reserve", "42 h"]],
+    "field": [["Movement", "automatic"], ["Case", "steel, 38 mm"],
+              ["Water resistance", "100 m"], ["Lume", "full dial"]],
+    "sunburst": [["Movement", "automatic"], ["Case", "steel, 36 mm"],
+                 ["Dial", "sunburst"], ["Strap", "leather, 18 mm"]],
+    "thin": [["Movement", "quartz, Japanese"], ["Case", "steel, 36 mm"],
+             ["Thickness", "7 mm"], ["Strap", "leather, 18 mm"]],
+    "minimal": [["Movement", "quartz, three-hander"], ["Case", "steel, 39 mm"],
+                ["Dial", "no date, no branding"], ["Strap", "leather, 20 mm"]],
+    "pearl": [["Movement", "quartz"], ["Case", "polished steel, 34 mm"],
+              ["Dial", "mother-of-pearl"], ["Strap", "leather, 16 mm"]],
+    "chrono": [["Movement", "quartz chronograph"], ["Case", "steel, 42 mm"],
+               ["Sub-dials", "three"], ["Bezel", "tachymeter"]],
+    "set": [["Includes", "watch, strap, case"], ["Case", "two slots"],
+            ["Packaging", "gift box"]],
+    "strap-leather": [["Material", "vegetable-tanned leather"], ["Width", "20 mm"],
+                      ["Spring bars", "quick-release"]],
+    "strap-milanese": [["Material", "stainless mesh"], ["Width", "20 mm"],
+                       ["Clasp", "sliding, infinite adjustment"]],
+    "strap-nato": [["Material", "seatbelt nylon"], ["Width", "20 mm"],
+                   ["Hardware", "brushed steel"]],
+}
+
+# Остаток на складе. -1 — продаём не считая штук; у дорогих моделей числа
+# маленькие намеренно: на демо это единственный способ увидеть, что «осталось N»
+# и отказ при нехватке вообще работают.
+STOCK = {
+    "skeleton": 2,
+    "chrono": 3,
+    "meridian": 5,
+    "set": 4,
+}
+
+# Промокоды демо-витрины. WELCOME10 без ограничений — его показывают в описании
+# магазина; NORDWIND20 с лимитом, чтобы на демо было видно, как код кончается.
+PROMOS = (
+    ("WELCOME10", 10, -1),
+    ("NORDWIND20", 20, 10),
+)
+
+
+def specs_for(title: str) -> list:
+    slug = ART.get(title)
+    return SPECS.get(slug, []) if slug else []
+
+
+def stock_for(title: str) -> int:
+    slug = ART.get(title)
+    return STOCK.get(slug, -1) if slug else -1
+
+
+def art_for(title: str) -> str | None:
+    """Значение `photo_file_id` для демо-товара или None, если картинки нет."""
+    slug = ART.get(title)
+    return f"{SEED_ART_PREFIX}{slug}" if slug else None
+
+
+def seed_art_path(photo_file_id: str | None) -> Path | None:
+    """Путь к демо-картинке по значению `photo_file_id` или None.
+
+    Слаг приходит из БД, поэтому сверяется со списком известных, а не
+    подставляется в путь как есть: иначе `seed:../../.env` вычитал бы из
+    каталога любой файл на диске.
+    """
+    if not photo_file_id or not photo_file_id.startswith(SEED_ART_PREFIX):
+        return None
+    slug = photo_file_id[len(SEED_ART_PREFIX):]
+    if slug not in set(ART.values()):
+        return None
+    path = ART_DIR / f"{slug}.png"
+    return path if path.exists() else None
+
 
 def active_catalog() -> dict:
     """Каталог по настройке SEED. Неизвестное значение — ошибка, а не молчаливый
@@ -179,5 +305,11 @@ async def seed_if_empty(session: AsyncSession) -> bool:
     for cat_title, products in active_catalog().items():
         cat = await repo.add_category(session, cat_title)
         for title, description, price in products:
-            await repo.add_product(session, cat.id, title, description, price, None)
+            await repo.add_product(
+                session, cat.id, title, description, price, art_for(title),
+                stock=stock_for(title), specs=specs_for(title),
+            )
+
+    for code, percent, max_uses in PROMOS:
+        await repo.add_promo(session, code, percent, max_uses)
     return True

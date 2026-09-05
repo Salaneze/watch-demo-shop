@@ -108,11 +108,45 @@ body {
 
 /* ---------- карточка товара ---------- */
 
-.hero { width: 100%; aspect-ratio: 1; object-fit: cover; background: var(--secondary-bg); }
+.hero-img { width: 100%; aspect-ratio: 1; object-fit: cover; background: var(--secondary-bg); }
 .detail { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .detail h1 { font-size: 20px; margin: 0; }
 .detail .price { font-size: 22px; font-weight: 700; }
 .detail p { margin: 0; color: var(--hint); white-space: pre-wrap; }
+
+/* Галерея. Точки, а не свайп: горизонтальный жест в webview Telegram
+   перехватывает сам клиент и закрывает окно приложения. */
+.gallery { position: relative; }
+.dots {
+  position: absolute;
+  left: 0; right: 0; bottom: 10px;
+  display: flex; justify-content: center; gap: 6px;
+}
+.dot {
+  width: 7px; height: 7px; padding: 0;
+  border: none; border-radius: 50%;
+  background: rgba(255, 255, 255, .45);
+  cursor: pointer;
+}
+.dot--on { background: #fff; }
+
+.stock { font-size: 13px; color: var(--hint); }
+.stock--low { color: var(--destructive); }
+
+.specs { display: flex; flex-direction: column; }
+.spec {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--separator);
+  font-size: 14px;
+}
+.spec:last-child { border-bottom: none; }
+.spec-key { color: var(--hint); }
+.spec-val { text-align: right; }
+
+.fineprint { font-size: 12px; color: var(--hint); text-align: center; line-height: 1.5; }
 
 /* ---------- корзина и форма ---------- */
 
@@ -208,4 +242,130 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .skeleton-card { animation: none; }
   .card:active { transform: none; }
+}
+
+/* ---------- шапка витрины, поиск, фильтры ---------- */
+
+/* Баннер намеренно без фотографии: одна картинка на всю ширину грузится дольше
+   всего остального экрана, а смысла несёт меньше, чем первая строка каталога. */
+.hero {
+  padding: 26px 16px 20px;
+  text-align: center;
+  background: var(--secondary-bg);
+  border-bottom: 1px solid var(--separator);
+}
+.hero-brand {
+  font-size: 26px;
+  letter-spacing: .32em;
+  font-weight: 500;
+  /* Отступ съедает letter-spacing последней буквы — иначе слово стоит не по центру. */
+  padding-left: .32em;
+}
+.hero-tagline {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: .22em;
+  color: var(--hint);
+  padding-left: .22em;
+}
+
+.search {
+  display: block;
+  width: calc(100% - 24px);
+  margin: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  background: var(--section-bg);
+  color: var(--text);
+  font: inherit;
+}
+.search:focus { outline: none; border-color: var(--button); }
+/* Крестик очистки в WebKit рисуется тёмным на тёмном — прячем, поле короткое. */
+.search::-webkit-search-cancel-button { display: none; }
+
+.filters { display: flex; gap: 8px; padding: 0 12px; }
+.chip {
+  padding: 7px 14px;
+  border: 1px solid var(--separator);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.chip--on { background: var(--button); color: var(--button-text); border-color: var(--button); }
+
+.heart {
+  position: absolute;
+  top: 8px; left: 8px;
+  z-index: 2;
+  width: 30px; height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, .35);
+  color: #fff;
+  font-size: 15px;
+  line-height: 30px;
+  cursor: pointer;
+}
+.heart--on { color: #ff6b6b; }
+
+.card-stock { font-size: 12px; color: var(--destructive); margin-top: 2px; }
+
+/* ---------- доставка, промокод, итог ---------- */
+
+.options { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; }
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  background: var(--section-bg);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.option--on { border-color: var(--button); }
+.option-title { font-weight: 600; }
+.option-note { font-size: 12px; color: var(--hint); margin-top: 2px; }
+.option-cost { white-space: nowrap; }
+
+.promo { display: flex; gap: 8px; padding: 0 12px; }
+.promo-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  background: var(--section-bg);
+  color: var(--text);
+  font: inherit;
+  text-transform: uppercase;
+}
+.promo-input:focus { outline: none; border-color: var(--button); }
+.promo-apply {
+  padding: 10px 16px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.sums { padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+.sum-row { display: flex; justify-content: space-between; gap: 12px; color: var(--hint); font-size: 14px; }
+.sum-row--total {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--separator);
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 700;
 }

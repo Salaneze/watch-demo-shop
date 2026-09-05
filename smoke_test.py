@@ -174,7 +174,7 @@ async def main() -> None:
             check("USD: символ перед суммой", fmt(2490) == "$2,490", fmt(2490))
             check("USD: symbol()", symbol() == "$")
             cfg2.currency = "RUB"
-            check("RUB: символ после суммы", fmt(2490) == "2 490 ₽", repr(fmt(2490)))
+            check("RUB: символ после суммы", fmt(2490) == "2\u00a0490\u00a0₽", repr(fmt(2490)))
             check("RUB: пробелы неразрывные", " " not in fmt(2490), repr(fmt(2490)))
             cfg2.currency = "eur"  # регистр прощается
             check("EUR: нормализация регистра", fmt(100) == "€100", fmt(100))

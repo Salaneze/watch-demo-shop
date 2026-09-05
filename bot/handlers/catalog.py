@@ -1,11 +1,12 @@
 from aiogram import F, Router
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, FSInputFile, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db import repo
 from bot.keyboards.callbacks import CategoryCB, NavCB, ProductCB
 from bot.keyboards.common import categories_kb, product_kb, products_kb
 from bot.utils.money import fmt
+from bot.utils.seed import seed_art_path
 from bot.utils.text import esc
 
 router = Router(name="catalog")
@@ -74,7 +75,12 @@ async def open_product(call: CallbackQuery, callback_data: ProductCB, session: A
         f"💰 <b>{fmt(p.price)}</b>"
     )
     kb = product_kb(p)
-    if p.photo_file_id:
-        await call.message.answer_photo(p.photo_file_id, caption=caption, reply_markup=kb)
+    # У демо-товара картинка лежит файлом в репозитории, у настоящего — в
+    # Telegram. file_id используем как есть: заливать одно и то же повторно
+    # незачем, а файл с диска поднимаем только для демо.
+    art = seed_art_path(p.photo_file_id)
+    photo = FSInputFile(art) if art is not None else p.photo_file_id
+    if photo:
+        await call.message.answer_photo(photo, caption=caption, reply_markup=kb)
     else:
         await call.message.answer(caption, reply_markup=kb)

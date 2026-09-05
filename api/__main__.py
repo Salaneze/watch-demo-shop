@@ -9,6 +9,17 @@ import uvicorn
 
 from bot.config import settings
 
+class _SkipHealthz(logging.Filter):
+    """Убирает health check из access-лога.
+
+    Платформа стучится в `/healthz` каждые несколько секунд; без фильтра эти
+    строки вытесняют из лога всё остальное и диагностика по нему невозможна.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/healthz" not in record.getMessage()
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
@@ -19,6 +30,8 @@ if __name__ == "__main__":
     # в контейнер снаружи и не достучится. Локально остаётся 127.0.0.1: незачем
     # выставлять отладочный сервер в свою сеть.
     host = "0.0.0.0" if settings.trust_proxy else settings.web_host  # noqa: S104
+
+    logging.getLogger("uvicorn.access").addFilter(_SkipHealthz())
 
     uvicorn.run(
         "api.app:app",

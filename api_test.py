@@ -169,6 +169,13 @@ def headers(raw: str) -> dict:
     return {"Authorization": f"tma {raw}"}
 
 
+def create_test_app() -> FastAPI:
+    """Только api-роутер: витрина, вебхук и лимиты здесь не нужны."""
+    app = FastAPI()
+    app.include_router(api_router)
+    return app
+
+
 async def endpoints() -> None:
     if DB_FILE.exists():
         DB_FILE.unlink()
@@ -176,9 +183,7 @@ async def endpoints() -> None:
     async with session_factory() as s:
         await seed_if_empty(s)
 
-    test_app = FastAPI()
-    test_app.include_router(api_router)
-    transport = httpx.ASGITransport(app=test_app)
+    transport = httpx.ASGITransport(app=create_test_app())
 
     buyer = make_init_data()
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
@@ -288,7 +293,56 @@ async def endpoints() -> None:
             await repo.toggle_product(s, first["id"])
 
 
+async def healthcheck() -> None:
+    """Health check платформы — проверяем на реальном приложении.
+
+    Живёт в `create_app`, а не в api-роутере: путь должен быть вне `/api`,
+    без подписи, без похода в БД и мимо ограничителя частоты. Иначе усыпляющий
+    тариф решит, что сервис мёртв, и снимет его.
+    """
+    from api.app import create_app  # noqa: PLC0415
+
+    print("\n[11] Health check")
+    transport = httpx.ASGITransport(app=create_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.get("/healthz")
+        check("healthz открыт без подписи", r.status_code == 200, f"код {r.status_code}")
+        check("healthz отвечает ok", r.json() == {"ok": True}, r.text[:60])
+
+
+async def seed_art() -> None:
+    """Картинки демо-товаров.
+
+    Лежат файлами в репозитории и подставляются в `photo_file_id` с префиксом
+    `seed:`. Проверяем и то, что витрина их отдаёт, и то, что слаг из БД нельзя
+    превратить в путь к чужому файлу.
+    """
+    from bot.utils.seed import art_for, seed_art_path
+
+    print("[12] Картинки демо-товаров")
+    check("слаг известного товара найден", art_for("Ohio Diver 67") == "seed:diver",
+          str(art_for("Ohio Diver 67")))
+    check("незнакомый товар остаётся без фото", art_for("Чужой товар") is None)
+    check("файл картинки на месте", seed_art_path("seed:diver") is not None)
+    check("выход из каталога отбит", seed_art_path("seed:../../.env") is None)
+    check("неизвестный слаг отбит", seed_art_path("seed:nope") is None)
+    check("обычный file_id не путается с демо", seed_art_path("AgACAgIAAxk") is None)
+
+    transport = httpx.ASGITransport(app=create_test_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        body = (await c.get("/api/catalog")).json()
+        first = body["categories"][0]["products"][0]
+        check("в каталоге есть ссылка на картинку", first["image"] is not None, str(first))
+        r = await c.get(first["image"])
+        check("картинка отдаётся", r.status_code == 200, f"код {r.status_code}")
+        check("картинка — PNG", r.headers.get("content-type") == "image/png",
+              str(r.headers.get("content-type")))
+        check("картинка не пустая", len(r.content) > 5000, f"{len(r.content)} байт")
+
+
 asyncio.run(endpoints())
+asyncio.run(healthcheck())
+asyncio.run(seed_art())
 
 print(f"\n{'=' * 44}\nOK: {ok}   FAIL: {fail}\n{'=' * 44}")
 raise SystemExit(1 if fail else 0)

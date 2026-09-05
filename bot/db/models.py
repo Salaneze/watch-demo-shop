@@ -1,7 +1,17 @@
 from datetime import datetime, timezone
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from bot.db.base import Base
@@ -67,6 +77,14 @@ class Product(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    # Характеристики карточки: [["Материал", "сталь"], ["Диаметр", "40 мм"]].
+    # Список пар, а не словарь: порядок строк в таблице задаёт продавец, а
+    # словарь в JSON его гарантирует только по счастливой случайности.
+    specs: Mapped[list] = mapped_column(JSON, default=list)
+    # Дополнительные фото для галереи, теми же идентификаторами, что photo_file_id.
+    # Первым кадром идёт photo_file_id, здесь только второй и дальше.
+    extra_photos: Mapped[list] = mapped_column(JSON, default=list)
+
     category: Mapped[Category] = relationship(back_populates="products")
 
 
@@ -88,6 +106,14 @@ class Order(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True)
     status: Mapped[OrderStatus] = mapped_column(String(32), default=OrderStatus.new)
+    # total — то, что человек платит: товары минус скидка плюс доставка.
+    # Слагаемые хранятся отдельно, иначе через месяц не восстановить, почему
+    # в заказе стоит именно эта сумма, а промокод к тому времени уже удалён.
+    items_total: Mapped[int] = mapped_column(Integer, default=0)
+    discount: Mapped[int] = mapped_column(Integer, default=0)
+    promo_code: Mapped[str] = mapped_column(String(32), default="")
+    delivery_method: Mapped[str] = mapped_column(String(32), default="pickup")
+    delivery_cost: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer)
     contact_name: Mapped[str] = mapped_column(String(255))
     contact_phone: Mapped[str] = mapped_column(String(64))
@@ -110,6 +136,38 @@ class OrderItem(Base):
     qty: Mapped[int] = mapped_column(Integer)
 
     order: Mapped[Order] = relationship(back_populates="items")
+
+
+class Favorite(Base):
+    """Отложенные товары. Живут отдельно от корзины: сердечко ни к чему не обязывает."""
+
+    __tablename__ = "favorites"
+    __table_args__ = (UniqueConstraint("user_id", "product_id", name="uq_fav_user_product"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    product: Mapped[Product] = relationship()
+
+
+class Promo(Base):
+    """Промокод со скидкой в процентах.
+
+    Счётчик использований хранится здесь же: «10 первым покупателям» без него
+    превращается в «всем желающим», а узнаём мы об этом по выручке.
+    """
+
+    __tablename__ = "promos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    percent: Mapped[int] = mapped_column(Integer)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    max_uses: Mapped[int] = mapped_column(Integer, default=-1)  # -1 = без ограничения
+    used: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class AuditLog(Base):

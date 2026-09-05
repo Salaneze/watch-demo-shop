@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from bot.utils.delivery import DEFAULT_DELIVERY, DELIVERY_OPTIONS
+
 
 class ProductOut(BaseModel):
     id: int
@@ -16,7 +18,13 @@ class ProductOut(BaseModel):
     price: int
     price_text: str
     image: str | None
+    # Все кадры галереи, включая первый. Пустой список — картинок нет вовсе.
+    images: list[str]
     category_id: int
+    # -1 = продаём без учёта остатка, тогда витрина про наличие ничего не пишет.
+    stock: int
+    specs: list[list[str]]
+    is_favorite: bool = False
 
 
 class CategoryOut(BaseModel):
@@ -28,6 +36,38 @@ class CategoryOut(BaseModel):
 class CatalogOut(BaseModel):
     currency: str
     categories: list[CategoryOut]
+
+
+class DeliveryOut(BaseModel):
+    code: str
+    title: str
+    note: str
+    cost: int
+    cost_text: str
+
+
+class PromoOut(BaseModel):
+    """Проверка промокода до оформления, чтобы сумму человек видел заранее."""
+
+    valid: bool
+    code: str
+    percent: int
+    discount: int
+    discount_text: str
+    message: str
+
+
+class FavoriteOut(BaseModel):
+    product_id: int
+    is_favorite: bool
+
+
+class FavoritePatch(BaseModel):
+    product_id: int
+
+
+class PromoIn(BaseModel):
+    code: str = Field(max_length=32)
 
 
 class CartLine(BaseModel):
@@ -75,6 +115,18 @@ class OrderIn(BaseModel):
     # Поле обязательное: будь оно необязательным, защиту снимал бы любой клиент,
     # просто не прислав его — включая старую версию витрины из кэша webview.
     expected_total: int = Field(ge=0)
+    # Только КОД способа доставки и ТЕКСТ промокода. Цену доставки и размер
+    # скидки считает сервер: пришли их клиент — курьер стоил бы столько,
+    # сколько покупатель захочет.
+    delivery: str = Field(default=DEFAULT_DELIVERY, max_length=32)
+    promo_code: str = Field(default="", max_length=32)
+
+    @field_validator("delivery")
+    @classmethod
+    def known_delivery(cls, v: str) -> str:
+        if v not in {o.code for o in DELIVERY_OPTIONS}:
+            raise ValueError("неизвестный способ доставки")
+        return v
 
     @field_validator("name", "phone", "address", "comment")
     @classmethod
@@ -101,6 +153,14 @@ class OrderOut(BaseModel):
     id: int
     status: str
     status_text: str
+    items_total: int
+    items_total_text: str
+    discount: int
+    discount_text: str
+    promo_code: str
+    delivery_title: str
+    delivery_cost: int
+    delivery_cost_text: str
     total: int
     total_text: str
     created_at: str

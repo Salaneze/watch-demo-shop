@@ -1,5 +1,5 @@
 """Доступ к данным. Каждая функция принимает открытую AsyncSession."""
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -7,11 +7,19 @@ from bot.db.models import (
     AuditLog,
     CartItem,
     Category,
+    Favorite,
     Order,
     OrderItem,
     OrderStatus,
     Product,
+    Promo,
     User,
+)
+from bot.utils.delivery import (
+    DEFAULT_DELIVERY,
+    delivery_option,
+    discount_for,
+    resolve_promo,
 )
 
 
@@ -40,17 +48,70 @@ async def category(s: AsyncSession, category_id: int) -> Category | None:
     return await s.get(Category, category_id)
 
 
-async def products_in_category(s: AsyncSession, category_id: int) -> list[Product]:
-    res = await s.scalars(
-        select(Product)
-        .where(Product.category_id == category_id, Product.is_active)
-        .order_by(Product.id)
-    )
-    return list(res)
+# Как витрина умеет сортировать каталог. Ключ приходит из запроса, поэтому
+# порядок задаётся здесь, а не собирается из строки: getattr(Product, поле)
+# по пользовательскому вводу — это способ отдать наружу любую колонку таблицы.
+SORT_ORDERS = {
+    "default": (Product.id.asc(),),
+    "price_asc": (Product.price.asc(), Product.id.asc()),
+    "price_desc": (Product.price.desc(), Product.id.asc()),
+    "title": (Product.title.asc(),),
+}
+DEFAULT_SORT = "default"
+
+
+async def products_in_category(
+    s: AsyncSession,
+    category_id: int,
+    *,
+    query: str = "",
+    sort: str = DEFAULT_SORT,
+) -> list[Product]:
+    stmt = select(Product).where(Product.category_id == category_id, Product.is_active)
+
+    query = query.strip()
+    if query:
+        # Ищем и по названию, и по описанию: «нато» человек напишет, помня
+        # ремешок, а не его артикул. like_escape — чтобы % в запросе искал
+        # процент, а не «что угодно».
+        pattern = f"%{_like_escape(query)}%"
+        stmt = stmt.where(
+            or_(
+                Product.title.ilike(pattern, escape="\\"),
+                Product.description.ilike(pattern, escape="\\"),
+            )
+        )
+
+    return list(await s.scalars(stmt.order_by(*SORT_ORDERS.get(sort, SORT_ORDERS[DEFAULT_SORT]))))
+
+
+def _like_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def product(s: AsyncSession, product_id: int) -> Product | None:
     return await s.get(Product, product_id)
+
+
+# ---------- favorites ----------
+
+async def favorite_ids(s: AsyncSession, user_id: int) -> set[int]:
+    res = await s.scalars(select(Favorite.product_id).where(Favorite.user_id == user_id))
+    return set(res)
+
+
+async def favorite_toggle(s: AsyncSession, user_id: int, product_id: int) -> bool:
+    """Ставит или снимает сердечко. Возвращает состояние ПОСЛЕ переключения."""
+    existing = await s.scalar(
+        select(Favorite).where(Favorite.user_id == user_id, Favorite.product_id == product_id)
+    )
+    if existing is not None:
+        await s.delete(existing)
+        await s.commit()
+        return False
+    s.add(Favorite(user_id=user_id, product_id=product_id))
+    await s.commit()
+    return True
 
 
 async def catalog_is_empty(s: AsyncSession) -> bool:
@@ -156,16 +217,28 @@ async def create_order(
     address: str,
     comment: str,
     expected_total: int | None = None,
+    delivery: str = DEFAULT_DELIVERY,
+    promo_code: str = "",
 ) -> Order:
     items = await cart_items(s, user_id)
     if not items:
         raise ValueError("empty cart")
 
-    total = sum(i.product.price * i.qty for i in items)
+    items_total = sum(i.product.price * i.qty for i in items)
+
+    # Скидка и доставка считаются здесь, а не берутся из запроса. Клиент присылает
+    # только код способа и текст промокода — иначе «курьер за 0» отправляется одним
+    # curl. Несуществующий промокод не ошибка: покупатель мог опечататься, заказ
+    # проходит без скидки, а расхождение поймает сверка expected_total ниже.
+    promo = await resolve_promo(s, promo_code)
+    discount = discount_for(items_total, promo)
+    option = delivery_option(delivery)
+    total = items_total - discount + option.cost
 
     # Цену показывали до того, как покупатель заполнил форму. Если админ успел её
     # поменять, молча списывать новую нельзя — заказ отклоняется, витрина покажет
-    # свежую корзину.
+    # свежую корзину. Сверяем итог целиком: подстановка чужого промокода на
+    # последнем шаге тоже меняет сумму и тоже должна ломать заказ.
     if expected_total is not None and expected_total != total:
         raise CartChanged(
             f"сумма изменилась: было {expected_total}, стало {total}"
@@ -190,9 +263,17 @@ async def create_order(
         if i.product.stock >= 0:
             i.product.stock -= i.qty
 
+    if promo is not None:
+        promo.used += 1
+
     order = Order(
         user_id=user_id,
         status=OrderStatus.awaiting_payment,
+        items_total=items_total,
+        discount=discount,
+        promo_code=promo.code if promo is not None else "",
+        delivery_method=option.code,
+        delivery_cost=option.cost,
         total=total,
         contact_name=name,
         contact_phone=phone,
@@ -252,6 +333,14 @@ async def set_order_status(s: AsyncSession, order_id: int, status: OrderStatus) 
 
 # ---------- admin: catalog edit ----------
 
+async def add_promo(s: AsyncSession, code: str, percent: int, max_uses: int = -1) -> Promo:
+    promo = Promo(code=code.strip().upper(), percent=percent, max_uses=max_uses)
+    s.add(promo)
+    await s.commit()
+    await s.refresh(promo)
+    return promo
+
+
 async def add_category(s: AsyncSession, title: str) -> Category:
     c = Category(title=title)
     s.add(c)
@@ -267,6 +356,10 @@ async def add_product(
     description: str,
     price: int,
     photo_file_id: str | None,
+    *,
+    stock: int = -1,
+    specs: list | None = None,
+    extra_photos: list | None = None,
 ) -> Product:
     p = Product(
         category_id=category_id,
@@ -274,6 +367,9 @@ async def add_product(
         description=description,
         price=price,
         photo_file_id=photo_file_id,
+        stock=stock,
+        specs=specs or [],
+        extra_photos=extra_photos or [],
     )
     s.add(p)
     await s.commit()
