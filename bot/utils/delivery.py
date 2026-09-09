@@ -71,3 +71,43 @@ def discount_for(items_total: int, promo: Promo | None) -> int:
     if promo is None:
         return 0
     return items_total * promo.percent // 100
+
+
+@dataclass(frozen=True)
+class Totals:
+    """Из чего складывается сумма заказа. Слагаемые хранятся отдельно от итога:
+    покупателю их показывают строками, а заказу они нужны в базе."""
+
+    items_total: int
+    discount: int
+    promo: Promo | None
+    option: DeliveryOption
+    total: int
+
+    @property
+    def promo_code(self) -> str:
+        return self.promo.code if self.promo is not None else ""
+
+
+async def quote(
+    session: AsyncSession, items_total: int, delivery: str, promo_code: str
+) -> Totals:
+    """Считает итог по сумме товаров, способу доставки и промокоду.
+
+    Одна точка расчёта на бота, витрину и оформление заказа. Пока их было две,
+    покупатель из чата и покупатель из Mini App получали разные условия при
+    одинаковой корзине — ровно тот баг, ради которого функция и появилась.
+
+    Несуществующий промокод не ошибка: человек мог опечататься, заказ проходит
+    без скидки. Неизвестный способ доставки — ошибка, см. delivery_option().
+    """
+    promo = await resolve_promo(session, promo_code)
+    discount = discount_for(items_total, promo)
+    option = delivery_option(delivery)
+    return Totals(
+        items_total=items_total,
+        discount=discount,
+        promo=promo,
+        option=option,
+        total=items_total - discount + option.cost,
+    )

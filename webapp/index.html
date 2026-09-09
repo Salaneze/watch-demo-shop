@@ -5,7 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Watch Demo</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <link rel="stylesheet" href="/style.css?v=4">
+  <!-- v поднимается при КАЖДОЙ правке app.js или style.css: webview Telegram
+       держит старый файл и после перезахода, а выглядит это как «деплой не
+       доехал». Забыть легко, поэтому метка живёт на виду, в одной строке. -->
+  <link rel="stylesheet" href="/style.css?v=5">
 </head>
 <body>
   <div id="app">
@@ -14,6 +17,6 @@
       <div class="skeleton-card"></div><div class="skeleton-card"></div>
     </div>
   </div>
-  <script src="/app.js?v=4"></script>
+  <script src="/app.js?v=5"></script>
 </body>
 </html>

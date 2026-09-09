@@ -10,6 +10,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import settings
 from bot.db.models import CartItem, Category, Order, OrderStatus, Product
 from bot.keyboards.callbacks import AdminOrderCB, CartCB, CategoryCB, NavCB, ProductCB
+from bot.utils.delivery import DELIVERY_OPTIONS
 from bot.utils.money import fmt
 
 
@@ -87,6 +88,23 @@ def cart_kb(items: list[CartItem]) -> InlineKeyboardMarkup:
         kb.row(InlineKeyboardButton(text="✅ Оформить заказ", callback_data=CartCB(action="checkout").pack()))
         kb.row(InlineKeyboardButton(text="🗑 Очистить", callback_data=CartCB(action="clear").pack()))
     kb.row(InlineKeyboardButton(text="🛍 В каталог", callback_data=NavCB(to="catalog").pack()))
+    return kb.as_markup()
+
+
+def delivery_kb() -> InlineKeyboardMarkup:
+    """Способы доставки с ценами. Код способа уезжает в callback_data, цена —
+    только в подписи: считать её всё равно будет сервер."""
+    kb = InlineKeyboardBuilder()
+    for o in DELIVERY_OPTIONS:
+        price = "бесплатно" if o.cost == 0 else fmt(o.cost)
+        kb.button(text=f"{o.title} — {price}", callback_data=f"checkout:dlv:{o.code}")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def promo_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Пропустить", callback_data="checkout:nopromo")
     return kb.as_markup()
 
 

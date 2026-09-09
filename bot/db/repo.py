@@ -15,12 +15,7 @@ from bot.db.models import (
     Promo,
     User,
 )
-from bot.utils.delivery import (
-    DEFAULT_DELIVERY,
-    delivery_option,
-    discount_for,
-    resolve_promo,
-)
+from bot.utils.delivery import DEFAULT_DELIVERY, Totals, quote
 
 
 # ---------- users ----------
@@ -203,6 +198,17 @@ async def cart_total(s: AsyncSession, user_id: int) -> int:
     return sum(i.product.price * i.qty for i in items)
 
 
+async def cart_quote(
+    s: AsyncSession, user_id: int, delivery: str = DEFAULT_DELIVERY, promo_code: str = ""
+) -> Totals:
+    """Итог по текущей корзине — то же, что посчитает create_order.
+
+    Нужна для превью в чате: показать одну сумму, а списать другую нельзя, а
+    считать её вторым куском кода — прямой путь к расхождению.
+    """
+    return await quote(s, await cart_total(s, user_id), delivery, promo_code)
+
+
 # ---------- orders ----------
 
 class CartChanged(Exception):
@@ -228,12 +234,11 @@ async def create_order(
 
     # Скидка и доставка считаются здесь, а не берутся из запроса. Клиент присылает
     # только код способа и текст промокода — иначе «курьер за 0» отправляется одним
-    # curl. Несуществующий промокод не ошибка: покупатель мог опечататься, заказ
-    # проходит без скидки, а расхождение поймает сверка expected_total ниже.
-    promo = await resolve_promo(s, promo_code)
-    discount = discount_for(items_total, promo)
-    option = delivery_option(delivery)
-    total = items_total - discount + option.cost
+    # curl. Расхождение с тем, что покупатель видел, поймает сверка expected_total.
+    totals = await quote(s, items_total, delivery, promo_code)
+    promo, discount, option, total = (
+        totals.promo, totals.discount, totals.option, totals.total
+    )
 
     # Цену показывали до того, как покупатель заполнил форму. Если админ успел её
     # поменять, молча списывать новую нельзя — заказ отклоняется, витрина покажет
