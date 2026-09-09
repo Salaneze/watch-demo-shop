@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import logging
+import re
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
@@ -22,7 +24,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import Update
 from fastapi import FastAPI, Header, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.limits import LimitsMiddleware
@@ -38,6 +40,40 @@ from bot.utils.seed import seed_if_empty
 log = logging.getLogger(__name__)
 
 WEBAPP_DIR = Path("webapp")
+
+# Файлы витрины, чья версия подставляется в index.html при отдаче.
+VERSIONED_ASSETS = ("app.js", "style.css")
+_index_cache: tuple[str, str] | None = None  # (отпечаток, готовый html)
+
+
+def asset_version() -> str:
+    """Отпечаток статики витрины: меняется вместе с файлами, и только с ними.
+
+    Webview Telegram держит app.js и style.css после перезахода, поэтому адрес
+    обязан меняться при каждой правке. Раньше версия стояла в index.html руками
+    и держалась на «не забудь поднять» — забыть достаточно один раз, чтобы
+    выкат выглядел как несработавший.
+    """
+    h = hashlib.sha1()
+    for name in VERSIONED_ASSETS:
+        path = WEBAPP_DIR / name
+        if path.exists():
+            h.update(path.read_bytes())
+    return h.hexdigest()[:8]
+
+
+def index_html() -> str:
+    """index.html с актуальной меткой версии у статики.
+
+    Разметка в файле остаётся рабочей сама по себе — подменяется только значение
+    после `?v=`, поэтому открыть webapp/index.html напрямую по-прежнему можно.
+    """
+    global _index_cache
+    version = asset_version()
+    if _index_cache is None or _index_cache[0] != version:
+        raw = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
+        _index_cache = (version, re.sub(r"\?v=[^\"']*", f"?v={version}", raw))
+    return _index_cache[1]
 
 
 @contextlib.asynccontextmanager
@@ -139,8 +175,8 @@ def create_app() -> FastAPI:
 
     if WEBAPP_DIR.exists():
         @app.get("/", include_in_schema=False)
-        async def index() -> FileResponse:
-            return FileResponse(WEBAPP_DIR / "index.html")
+        async def index() -> HTMLResponse:
+            return HTMLResponse(index_html())
 
         app.mount("/", StaticFiles(directory=WEBAPP_DIR), name="webapp")
 

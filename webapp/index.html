@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Watch Demo</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
-  <!-- v поднимается при КАЖДОЙ правке app.js или style.css: webview Telegram
-       держит старый файл и после перезахода, а выглядит это как «деплой не
-       доехал». Забыть легко, поэтому метка живёт на виду, в одной строке. -->
+  <!-- Значение ?v= подставляет сервер по отпечатку самих файлов (api/app.py,
+       index_html). То, что стоит здесь, — заглушка для случая, когда файл
+       открывают напрямую с диска, руками её поднимать не нужно. -->
   <link rel="stylesheet" href="/style.css?v=5">
 </head>
 <body>
