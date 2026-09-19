@@ -21,3 +21,9 @@ class AddProduct(StatesGroup):
     description = State()
     price = State()
     photo = State()
+
+
+class AiChat(StatesGroup):
+    # Пока клиент в этом состоянии, любой текст уходит модели, а не в поиск
+    # по каталогу. Кнопки меню продолжают работать: их фильтры стоят раньше.
+    talking = State()

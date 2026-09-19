@@ -27,6 +27,8 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🛍 Каталог"), KeyboardButton(text="🛒 Корзина")],
         [KeyboardButton(text="📦 Мои заказы"), KeyboardButton(text="ℹ️ О магазине")],
     ]
+    if settings.ai_provider:
+        rows.append([KeyboardButton(text="🤖 Консультант")])
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админка")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)

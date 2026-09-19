@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     seed: str = "shop"
     # Валюта витрины: USD | EUR | GBP | RUB | KZT
     currency: str = "USD"
+    shop_name: str = "Watch Demo"
+
+    # --- ИИ-консультант ---
+    # Пусто — консультанта нет, кнопка не показывается, SDK не импортируется.
+    # gigachat — российский, оплата в рублях, физлицу год бесплатных токенов.
+    ai_provider: str = ""
+    gigachat_credentials: str = ""
+    gigachat_model: str = "GigaChat-2"
+    # Сертификат НУЦ Минцифры на машине не стоит — ставить, а не выключать
+    # проверку. False только для локальной отладки.
+    gigachat_verify_ssl: bool = True
 
     # Стоимость доставки — в той же валюте, что и товары, поэтому меняется
     # вместе с ней: 490 это вменяемая цена курьера в рублях и абсурдная
