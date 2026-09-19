@@ -34,6 +34,9 @@ class Reply:
     text: str = ""
     tool_name: str = ""
     tool_args: dict[str, Any] = field(default_factory=dict)
+    # Непрозрачные данные провайдера, которые надо вернуть ему с вызовом
+    # (Gemini 3: thoughtSignature). Агент их не трактует, только протаскивает.
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def wants_tool(self) -> bool:
@@ -117,6 +120,82 @@ class GigaChatProvider:
         return Reply(text=text.strip())
 
 
+class GeminiProvider:
+    """Gemini по REST через httpx — без SDK намеренно: google-genai требует
+    pydantic >= 2.12, aiogram 3.15 — < 2.10, вместе не живут. Для отладки
+    поведения агента на живой модели; клиентам из РФ не предлагать (VPN, карта).
+
+    Роли Gemini — user/model, результат функции идёт как functionResponse
+    в реплике user; system — отдельным полем. Конвертируем из нашего формата
+    на входе, чтобы agent.py об этом не знал.
+    """
+
+    URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    def __init__(self, api_key: str, model: str = "gemini-3.5-flash-lite", timeout: float = 30.0) -> None:
+        self._key = api_key
+        self._model = model
+        self._timeout = timeout
+
+    @staticmethod
+    def _convert(messages: list[Message]) -> tuple[str, list[dict[str, Any]]]:
+        system = ""
+        contents: list[dict[str, Any]] = []
+        for m in messages:
+            role = m["role"]
+            if role == "system":
+                system = m["content"]
+            elif role == "user":
+                contents.append({"role": "user", "parts": [{"text": m["content"]}]})
+            elif role == "assistant":
+                call = m.get("function_call")
+                if call:
+                    part = {"functionCall": {"name": call["name"], "args": call["arguments"]}}
+                    # Без подписи мысли Gemini 3 отвечает 400 на следующий запрос.
+                    sig = (call.get("raw") or {}).get("thoughtSignature")
+                    if sig:
+                        part["thoughtSignature"] = sig
+                else:
+                    part = {"text": m["content"]}
+                contents.append({"role": "model", "parts": [part]})
+            elif role == "function":
+                contents.append({"role": "user", "parts": [{"functionResponse": {
+                    "name": m["name"], "response": {"result": m["content"]}}}]})
+        return system, contents
+
+    async def complete(self, messages: list[Message], tools: list[ToolSpec]) -> Reply:
+        import httpx
+
+        system, contents = self._convert(messages)
+        body: dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {"temperature": 0.3},
+        }
+        if system:
+            body["systemInstruction"] = {"parts": [{"text": system}]}
+        if tools:
+            body["tools"] = [{"functionDeclarations": [
+                {"name": t.name, "description": t.description, "parameters": t.parameters}
+                for t in tools
+            ]}]
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            # Ключ в заголовке, не в query: httpx печатает URL в исключениях и логах.
+            r = await client.post(
+                self.URL.format(model=self._model),
+                headers={"x-goog-api-key": self._key},
+                json=body,
+            )
+        if r.status_code >= 400:
+            raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
+        parts = r.json()["candidates"][0]["content"].get("parts", [])
+        for p in parts:
+            if "functionCall" in p:
+                fc = p["functionCall"]
+                raw = {"thoughtSignature": p["thoughtSignature"]} if p.get("thoughtSignature") else {}
+                return Reply(tool_name=fc["name"], tool_args=dict(fc.get("args") or {}), raw=raw)
+        return Reply(text="".join(p.get("text", "") for p in parts).strip())
+
+
 class FakeProvider:
     """Провайдер по сценарию для тестов: отдаёт заранее заданные ответы по
     порядку и запоминает всё, что ему прислали, — по этому и проверяем, что
@@ -148,4 +227,8 @@ def build_provider(name: str, **kwargs: Any) -> LLM | None:
             model=kwargs.get("model") or "GigaChat-2",
             verify_ssl=kwargs.get("verify_ssl", True),
         )
+    if name == "gemini":
+        if not kwargs.get("gemini_api_key"):
+            raise ValueError("AI_PROVIDER=gemini, но GEMINI_API_KEY пуст")
+        return GeminiProvider(api_key=kwargs["gemini_api_key"], model=kwargs.get("gemini_model") or "gemini-3.5-flash-lite")
     raise ValueError(f"Неизвестный AI_PROVIDER: {name}")

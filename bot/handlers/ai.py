@@ -38,6 +38,8 @@ def get_agent() -> Agent | None:
             credentials=settings.gigachat_credentials,
             model=settings.gigachat_model,
             verify_ssl=settings.gigachat_verify_ssl,
+            gemini_api_key=settings.gemini_api_key,
+            gemini_model=settings.gemini_model,
         )
         if llm is None:
             return None
