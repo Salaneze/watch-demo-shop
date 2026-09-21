@@ -34,7 +34,8 @@ from bot.db.base import init_db, session_factory
 from bot.db.models import Order
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
-from bot.utils.notify import notify_admins_new_order
+from bot.utils.notify import notify_admins_new_order, notify_admins_order_cancelled
+from bot.utils.sweeper import start_sweeper
 from bot.utils.seed import seed_if_empty
 
 log = logging.getLogger(__name__)
@@ -112,7 +113,11 @@ async def lifespan(app: FastAPI):
     async def notify(order: Order) -> None:
         await notify_admins_new_order(bot, order, source="витрина")
 
+    async def notify_cancel(order: Order) -> None:
+        await notify_admins_order_cancelled(bot, order, source="витрина")
+
     app.state.notify_admins = notify
+    app.state.notify_admins_cancel = notify_cancel
 
     webhook = settings.use_webhook and settings.has_webapp
     if settings.use_webhook and not settings.has_webapp:
@@ -143,13 +148,15 @@ async def lifespan(app: FastAPI):
         polling = asyncio.create_task(dp.start_polling(bot))
         log.info("Режим long-polling")
 
+    sweeper = start_sweeper(bot)
     try:
         yield
     finally:
-        if polling is not None:
-            polling.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await polling
+        for task in (polling, sweeper):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
         await bot.session.close()
 
 
