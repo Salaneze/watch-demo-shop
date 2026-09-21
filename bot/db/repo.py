@@ -1,5 +1,7 @@
 """Доступ к данным. Каждая функция принимает открытую AsyncSession."""
-from sqlalchemy import delete, func, or_, select
+from datetime import datetime
+
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,6 +13,7 @@ from bot.db.models import (
     Order,
     OrderItem,
     OrderStatus,
+    OrderStatusHistory,
     Product,
     Promo,
     User,
@@ -290,6 +293,13 @@ async def create_order(
         for i in items
     ]
     s.add(order)
+    await s.flush()
+    # Первая запись истории — здесь, а не ждём первого действия админа: засев
+    # в init_db помечает «статус на момент миграции» любой заказ без истории,
+    # и свежий заказ после рестарта выглядел бы как доисторический.
+    s.add(OrderStatusHistory(
+        order_id=order.id, status=str(order.status), actor="customer", actor_id=user_id,
+    ))
     # Корзина уже удалена выше — это и был захват заявки.
     await s.commit()
     await s.refresh(order, ["items"])
@@ -327,13 +337,67 @@ async def orders_by_status(s: AsyncSession, status: OrderStatus | None = None, l
     return list(res)
 
 
-async def set_order_status(s: AsyncSession, order_id: int, status: OrderStatus) -> Order | None:
-    o = await s.get(Order, order_id)
-    if o is None:
-        return None
-    o.status = status
+async def set_order_status(s: AsyncSession, order_id: int, expected: str, new: str) -> bool:
+    """Условный UPDATE: статус меняется, только если он всё ещё `expected`.
+
+    Два админа на одной кнопке или кнопка в старом сообщении — оба случая
+    сводятся к «строка не изменилась». SELECT FOR UPDATE в SQLite нет, а
+    записи он сериализует сам, так что rowcount и есть атомарная проверка.
+    Без commit: история должна лечь в ту же транзакцию, коммитит вызывающий.
+    """
+    res = await s.execute(
+        update(Order).where(Order.id == order_id, Order.status == expected).values(status=new)
+    )
+    return res.rowcount == 1
+
+
+async def add_status_entry(
+    s: AsyncSession, order_id: int, status: str, actor: str, actor_id: int | None, note: str = "",
+) -> OrderStatusHistory:
+    entry = OrderStatusHistory(
+        order_id=order_id, status=status, actor=actor, actor_id=actor_id, note=note,
+    )
+    s.add(entry)
+    await s.flush()
+    return entry
+
+
+async def history_for(s: AsyncSession, order_id: int) -> list[OrderStatusHistory]:
+    res = await s.scalars(
+        select(OrderStatusHistory)
+        .where(OrderStatusHistory.order_id == order_id)
+        .order_by(OrderStatusHistory.created_at, OrderStatusHistory.id)
+    )
+    return list(res)
+
+
+async def mark_not_notified(s: AsyncSession, entry_id: int) -> None:
+    """Единственный UPDATE по истории. Дошло ли сообщение, известно только после
+    коммита перехода, а откатывать запись ради чистоты append-only нельзя —
+    потерять факт смены статуса хуже, чем поправить один флаг."""
+    await s.execute(
+        update(OrderStatusHistory).where(OrderStatusHistory.id == entry_id).values(notified=False)
+    )
     await s.commit()
-    return o
+
+
+async def unpaid_older_than(s: AsyncSession, statuses: set[str], cutoff: datetime) -> list[Order]:
+    res = await s.scalars(
+        select(Order)
+        .where(Order.status.in_(statuses), Order.created_at < cutoff)
+        .options(selectinload(Order.items))
+        .order_by(Order.id)
+    )
+    return list(res)
+
+
+async def return_stock(s: AsyncSession, o: Order) -> None:
+    """Вернуть позиции отменённого заказа в наличие. Без commit."""
+    for item in o.items:
+        p = await s.get(Product, item.product_id)
+        # -1 = без ограничения: там нечего возвращать, и «-1 + qty» стало бы лимитом.
+        if p is not None and p.stock >= 0:
+            p.stock += item.qty
 
 
 # ---------- admin: catalog edit ----------

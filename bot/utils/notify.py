@@ -8,9 +8,11 @@ from __future__ import annotations
 import logging
 
 from aiogram import Bot
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
-from bot.db.models import Order
+from bot.db import repo
+from bot.db.models import Order, OrderStatusHistory, status_ru
 from bot.keyboards.common import admin_order_kb
 from bot.utils.delivery import delivery_option
 from bot.utils.money import fmt
@@ -95,3 +97,74 @@ async def notify_admins_new_order(bot: Bot, order: Order, source: str = "") -> N
             )
         except Exception as e:  # админ мог не нажать /start у бота
             log.warning("Не смог уведомить админа %s: %s", admin_id, e)
+
+
+async def notify_admins_order_cancelled(bot: Bot, order: Order, source: str = "") -> None:
+    """Покупатель отменил заказ сам — админам знать, чтобы не собирать его."""
+    head = f"↩️ <b>Заказ #{order.id} отменён покупателем</b>"
+    if source:
+        head += f" ({esc(source)})"
+    for admin_id in settings.admins:
+        try:
+            await bot.send_message(admin_id, head + "\n\n" + order_text(order, for_admin=True))
+        except Exception as e:
+            log.warning("Не смог уведомить админа %s: %s", admin_id, e)
+
+
+def history_lines(entries: list[OrderStatusHistory]) -> list[str]:
+    """История статусов для карточки — одна строка на запись, note только если есть."""
+    lines = []
+    for h in entries:
+        when = h.created_at.strftime("%d.%m %H:%M")
+        line = f"<code>{when}</code> {status_ru(h.status)}"
+        if h.note:
+            line += f" — {esc(h.note)}"
+        lines.append(line)
+    return lines
+
+
+def status_message(order: Order, entry: OrderStatusHistory) -> str:
+    """Что получает покупатель при смене статуса. Текст зависит и от статуса,
+    и от способа получения: «готов к выдаче» без адреса — пустой звук."""
+    head = f"Заказ #{order.id}: <b>{status_ru(entry.status)}</b>"
+    st, method, note = str(entry.status), order.delivery_method, esc(entry.note)
+    if st == "paid":
+        body = "Оплата подтверждена, собираем заказ."
+    elif st == "assembled":
+        body = "Заказ собран, " + ("готовим к выдаче." if method == "pickup" else "скоро отправим.")
+    elif st == "shipped":
+        if method == "post":
+            body = f"Отправлен почтой. Трек-номер: <code>{note}</code>"
+        else:
+            body = "Передан курьеру." + (f" Номер: <code>{note}</code>" if note else "")
+    elif st == "ready_for_pickup":
+        body = (
+            f"Можно забирать!\n🏠 {esc(settings.pickup_address)}\n"
+            f"🕓 {esc(settings.pickup_hours)}"
+        )
+    elif st == "delivered":
+        body = "Спасибо за покупку!"
+    elif st == "cancelled":
+        body = f"Причина: {note}" if note else "Заказ отменён."
+    else:
+        body = ""
+    return head + ("\n" + body if body else "")
+
+
+async def notify_customer_status(
+    bot: Bot, session: AsyncSession, order: Order, entry: OrderStatusHistory,
+) -> bool:
+    """Уведомить покупателя о переходе. False — не дошло, флаг записан в историю.
+
+    Причины не различаем (заблокировал бота, удалил чат, сеть): действие админа
+    одно и то же — связаться другим способом.
+    TODO: повторной отправки нет. Сетевой сбой на секунду помечает запись как
+    «не уведомлён» навсегда; если такое начнёт случаться, нужна очередь с backoff.
+    """
+    try:
+        await bot.send_message(order.user_id, status_message(order, entry))
+        return True
+    except Exception as e:
+        log.warning("Не смог уведомить покупателя %s о заказе #%s: %s", order.user_id, order.id, e)
+        await repo.mark_not_notified(session, entry.id)
+        return False

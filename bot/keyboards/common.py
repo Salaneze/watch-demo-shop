@@ -8,9 +8,17 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import settings
-from bot.db.models import CartItem, Category, Order, OrderStatus, Product
-from bot.keyboards.callbacks import AdminOrderCB, CartCB, CategoryCB, NavCB, ProductCB
+from bot.db.models import CartItem, Category, Order, Product
+from bot.keyboards.callbacks import (
+    AdminOrderCB,
+    CartCB,
+    CategoryCB,
+    CustomerOrderCB,
+    NavCB,
+    ProductCB,
+)
 from bot.utils.delivery import DELIVERY_OPTIONS
+from bot.utils.lifecycle import CUSTOMER_MAY_CANCEL_FROM, allowed_next
 from bot.utils.money import fmt
 
 
@@ -118,23 +126,35 @@ def confirm_order_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# Какие действия доступны из каждого статуса. Терминальные статусы
-# (отправлен, отменён) кнопок не дают — иначе отменённый заказ можно
-# одним кликом вернуть в оплаченные и отгрузить.
-# Ключи — строки, а не члены OrderStatus: из БД статус приходит обычным str,
-# а Enum.__hash__ считается по имени члена (та же грабля, что была со STATUS_RU).
-ORDER_ACTIONS: dict[str, list[tuple[str, str]]] = {
-    OrderStatus.new.value: [("✅ Оплачен", "paid"), ("❌ Отменить", "cancel")],
-    OrderStatus.awaiting_payment.value: [("✅ Оплачен", "paid"), ("❌ Отменить", "cancel")],
-    OrderStatus.paid.value: [("📦 Отправлен", "shipped"), ("❌ Отменить", "cancel")],
-    OrderStatus.shipped.value: [],
-    OrderStatus.cancelled.value: [],
+# Подписи кнопок — здесь, правила «что откуда можно» — в lifecycle.TRANSITIONS.
+# Клавиатура их только читает: одна схема на бот, витрину и проверку на сервере.
+ACTION_LABELS = {
+    "paid": "✅ Оплачен",
+    "assembled": "📦 Собран",
+    "shipped": "🚚 Отправлен",
+    "ready_for_pickup": "🏪 Готов к выдаче",
+    "delivered": "✔️ Выдан",
+    "cancelled": "❌ Отменить",
 }
 
 
 def admin_order_kb(order: Order) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for label, action in ORDER_ACTIONS.get(str(order.status), []):
-        kb.button(text=label, callback_data=AdminOrderCB(order_id=order.id, action=action))
+    for to_status in allowed_next(order):
+        kb.button(
+            text=ACTION_LABELS.get(to_status, to_status),
+            callback_data=AdminOrderCB(
+                order_id=order.id, action=to_status, from_status=str(order.status),
+            ),
+        )
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def customer_order_kb(order: Order) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🕓 История", callback_data=CustomerOrderCB(order_id=order.id, action="history"))
+    if str(order.status) in CUSTOMER_MAY_CANCEL_FROM:
+        kb.button(text="❌ Отменить", callback_data=CustomerOrderCB(order_id=order.id, action="cancel"))
     kb.adjust(2)
     return kb.as_markup()

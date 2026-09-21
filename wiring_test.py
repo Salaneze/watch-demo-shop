@@ -79,11 +79,12 @@ packed = CartCB(action="inc", product_id=7).pack()
 check("CartCB round-trip", CartCB.unpack(packed).product_id == 7, packed)
 check("CategoryCB round-trip", CategoryCB.unpack(CategoryCB(id=3).pack()).id == 3)
 check("ProductCB round-trip", ProductCB.unpack(ProductCB(id=5, category_id=2).pack()).category_id == 2)
-check(
-    "AdminOrderCB round-trip",
-    AdminOrderCB.unpack(AdminOrderCB(order_id=9, action="paid").pack()).action == "paid",
-)
+cb = AdminOrderCB(order_id=9, action="paid", from_status="awaiting_payment")
+check("AdminOrderCB round-trip", AdminOrderCB.unpack(cb.pack()).from_status == "awaiting_payment")
 check("длина callback_data < 64 байт", len(packed.encode()) < 64, len(packed.encode()))
+# Самая длинная пара статусов с шестизначным номером заказа — предел Telegram 64 байта.
+longest = AdminOrderCB(order_id=999999, action="ready_for_pickup", from_status="awaiting_payment").pack()
+check("самый длинный AdminOrderCB влезает в 64 байта", len(longest.encode()) <= 64, len(longest.encode()))
 
 print(f"\n{'=' * 40}\nOK: {ok}   FAIL: {fail}\n{'=' * 40}")
 raise SystemExit(1 if fail else 0)

@@ -29,6 +29,7 @@ from bot.db.base import init_db, session_factory  # noqa: E402
 from bot.db.models import OrderStatus  # noqa: E402
 from bot.handlers.checkout import order_text  # noqa: E402
 from bot.keyboards.common import admin_order_kb  # noqa: E402
+from bot.utils.lifecycle import apply_transition  # noqa: E402
 from bot.utils.seed import seed_if_empty  # noqa: E402
 
 ok = 0
@@ -158,7 +159,9 @@ async def main() -> None:
         await repo.toggle_product(s, p.id)  # вернуть обратно
 
         print("\n[5] Кнопки админа для отменённого заказа")
-        cancelled = await repo.set_order_status(s, own.id, OrderStatus.cancelled)
+        cancelled, _ = await apply_transition(
+            s, own.id, str(own.status), OrderStatus.cancelled, actor="admin", note="тест",
+        )
         labels = [
             b.text
             for row in admin_order_kb(cancelled).inline_keyboard

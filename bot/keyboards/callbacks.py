@@ -21,4 +21,14 @@ class NavCB(CallbackData, prefix="nav"):
 
 class AdminOrderCB(CallbackData, prefix="aord"):
     order_id: int
-    action: str  # paid | shipped | cancel | view
+    action: str       # целевой статус (значение OrderStatus)
+    # Статус, который админ видел на кнопке. Кнопка в старом сообщении несёт
+    # устаревшее значение и отбивается условным UPDATE — без отдельной ветки.
+    # Самый длинный вариант «aord:999999:ready_for_pickup:awaiting_payment»
+    # — 46 байт при лимите Telegram в 64.
+    from_status: str
+
+
+class CustomerOrderCB(CallbackData, prefix="cord"):
+    order_id: int
+    action: str  # history | cancel

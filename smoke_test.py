@@ -26,6 +26,7 @@ from bot.db.base import init_db, session_factory  # noqa: E402
 from bot.db.models import OrderStatus, status_ru  # noqa: E402
 from bot.handlers.checkout import order_text  # noqa: E402
 from bot.keyboards.common import admin_order_kb, cart_kb, categories_kb, products_kb  # noqa: E402
+from bot.utils.lifecycle import InvalidTransition, apply_transition  # noqa: E402
 from bot.utils.seed import CATALOGS, active_catalog, seed_if_empty  # noqa: E402
 
 DEMO = active_catalog()
@@ -104,14 +105,24 @@ async def main() -> None:
             check("ValueError на пустой корзине", True)
 
         print("\n[5] Смена статуса админом")
-        upd = await repo.set_order_status(s, order.id, OrderStatus.paid)
+        upd, entry = await apply_transition(
+            s, order.id, "awaiting_payment", "paid", actor="admin", actor_id=1,
+        )
         check("статус paid", upd.status == OrderStatus.paid)
         check("status_ru для str из БД", status_ru(upd.status) == "✅ оплачен", status_ru(upd.status))
         reloaded = await repo.order(s, order.id)
         check("статус сохранился в БД", str(reloaded.status) == "paid", str(reloaded.status))
         check("фильтр по статусу", len(await repo.orders_by_status(s, OrderStatus.paid)) == 1)
         check("нет ждущих оплаты", not await repo.orders_by_status(s, OrderStatus.awaiting_payment))
-        check("несуществующий заказ -> None", await repo.set_order_status(s, 9999, OrderStatus.paid) is None)
+        hist = await repo.history_for(s, order.id)
+        check("история: создание + переход", [h.status for h in hist] == ["awaiting_payment", "paid"],
+              str([h.status for h in hist]))
+        check("инициатор перехода — админ", entry.actor == "admin" and entry.actor_id == 1)
+        try:
+            await apply_transition(s, 9999, "new", "paid", actor="admin")
+            check("несуществующий заказ -> InvalidTransition", False, "исключения не было")
+        except InvalidTransition:
+            check("несуществующий заказ -> InvalidTransition", True)
 
         print("\n[6] Админ: категория, товар, скрытие")
         cat = await repo.add_category(s, "Тест-категория")

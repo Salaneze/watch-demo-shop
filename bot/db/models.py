@@ -25,7 +25,10 @@ class OrderStatus(StrEnum):
     new = "new"
     awaiting_payment = "awaiting_payment"
     paid = "paid"
-    shipped = "shipped"
+    assembled = "assembled"
+    shipped = "shipped"            # курьер и почта
+    ready_for_pickup = "ready_for_pickup"  # самовывоз
+    delivered = "delivered"
     cancelled = "cancelled"
 
 
@@ -35,7 +38,10 @@ STATUS_RU = {
     "new": "🆕 новый",
     "awaiting_payment": "⏳ ждёт оплаты",
     "paid": "✅ оплачен",
-    "shipped": "📦 отправлен",
+    "assembled": "📦 собран",
+    "shipped": "🚚 отправлен",
+    "ready_for_pickup": "🏪 готов к выдаче",
+    "delivered": "✔️ выдан",
     "cancelled": "❌ отменён",
 }
 
@@ -123,6 +129,30 @@ class Order(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     items: Mapped[list["OrderItem"]] = relationship(back_populates="order", cascade="all, delete-orphan")
+    history: Mapped[list["OrderStatusHistory"]] = relationship(
+        order_by="OrderStatusHistory.created_at, OrderStatusHistory.id",
+        cascade="all, delete-orphan",
+    )
+
+
+class OrderStatusHistory(Base):
+    """Что было с заказом — для покупателя. Только добавление записей.
+
+    Не путать с AuditLog: тот про «кто из админов что нажал», этот про сам заказ,
+    и его покупатель видит в чате и витрине. Единственное поле, которое меняется
+    после вставки, — notified: узнать, дошло ли сообщение, можно только после
+    того, как переход уже закоммичен.
+    """
+    __tablename__ = "order_status_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+    actor: Mapped[str] = mapped_column(String(16))  # admin | customer | system
+    actor_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    note: Mapped[str] = mapped_column(Text, default="")  # трек, причина отмены
+    notified: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class OrderItem(Base):

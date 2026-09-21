@@ -8,11 +8,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
 from bot.db import repo
-from bot.db.models import OrderStatus, status_ru
+from bot.db.models import Order, OrderStatus, status_ru
 from bot.keyboards.callbacks import AdminOrderCB
 from bot.keyboards.common import admin_order_kb
-from bot.states import AddProduct
+from bot.states import AddProduct, AdminOrderInput
+from bot.utils.lifecycle import (
+    CANCEL_REASON_MAX,
+    InvalidTransition,
+    apply_transition,
+    is_final,
+    note_required,
+    validate_note,
+)
 from bot.utils.money import fmt, symbol
+from bot.utils.notify import history_lines, notify_customer_status, order_text
 from bot.utils.text import esc
 
 router = Router(name="admin")
@@ -82,40 +91,104 @@ async def list_new_orders(message: Message, session: AsyncSession) -> None:
         )
 
 
+def _order_card(order, history) -> str:
+    return order_text(order, for_admin=True) + "\n\n🕓 <b>История</b>\n" + "\n".join(history_lines(history))
+
+
+async def _finish_transition(
+    session: AsyncSession, bot: Bot, admin_id: int,
+    order_id: int, from_status: str, to_status: str, note: str = "",
+) -> tuple[str, Order, list]:
+    """Общий хвост кнопки и текстового ввода: переход, журнал, уведомление.
+
+    Возвращает текст для админа, заказ и историю. InvalidTransition наружу —
+    вызывающий решает, alert это или обычный ответ.
+    """
+    order, entry = await apply_transition(
+        session, order_id, from_status, to_status, actor="admin", actor_id=admin_id, note=note,
+    )
+    await repo.log_action(
+        session, admin_id, "order_status", f"order#{order.id}", f"{from_status} -> {to_status}",
+    )
+    reply = f"Статус: {status_ru(to_status)}"
+    if not await notify_customer_status(bot, session, order, entry):
+        reply += "\n⚠ покупатель не уведомлён"
+    return reply, order, await repo.history_for(session, order.id)
+
+
 @router.callback_query(AdminOrderCB.filter())
 async def order_action(
-    call: CallbackQuery, callback_data: AdminOrderCB, session: AsyncSession, bot: Bot
+    call: CallbackQuery, callback_data: AdminOrderCB, session: AsyncSession,
+    bot: Bot, state: FSMContext,
 ) -> None:
-    mapping = {
-        "paid": OrderStatus.paid,
-        "shipped": OrderStatus.shipped,
-        "cancel": OrderStatus.cancelled,
-    }
-    new_status = mapping.get(callback_data.action)
-    if new_status is None:
-        await call.answer("Неизвестное действие", show_alert=True)
-        return
-
-    order = await repo.set_order_status(session, callback_data.order_id, new_status)
+    order = await repo.order(session, callback_data.order_id)
     if order is None:
         await call.answer("Заказ не найден", show_alert=True)
         return
+    to_status, from_status = callback_data.action, callback_data.from_status
 
-    await repo.log_action(
-        session, call.from_user.id, "order_status",
-        f"order#{order.id}", f"-> {new_status.value}",
-    )
-
-    await call.answer(f"Статус: {status_ru(new_status)}")
-    await call.message.edit_reply_markup(reply_markup=admin_order_kb(order))
+    # Отмена и почтовый трек требуют текста — уходим в FSM, переход случится
+    # после ввода. Проверка статуса там же: пока админ печатает, заказ может уйти.
+    if note_required(to_status, order.delivery_method):
+        await state.set_state(
+            AdminOrderInput.cancel_reason if to_status == "cancelled" else AdminOrderInput.track
+        )
+        await state.update_data(order_id=order.id, from_status=from_status, to_status=to_status)
+        prompt = (
+            f"Причина отмены заказа #{order.id} (до {CANCEL_REASON_MAX} символов), покупатель её увидит"
+            if to_status == "cancelled" else
+            f"Трек-номер для заказа #{order.id}"
+        )
+        await call.answer()
+        await call.message.answer(prompt + "\n\n/cancel — передумал")
+        return
 
     try:
-        await bot.send_message(
-            order.user_id,
-            f"Заказ #{order.id}: статус изменён — <b>{status_ru(new_status)}</b>",
+        reply, order, history = await _finish_transition(
+            session, bot, call.from_user.id, order.id, from_status, to_status,
         )
-    except Exception as e:
-        log.warning("Не смог уведомить покупателя %s: %s", order.user_id, e)
+    except InvalidTransition as e:
+        await call.answer(f"Заказ уже в статусе {status_ru(e.current)}", show_alert=True)
+        # Перечитать: после отката сессии загруженный объект протух.
+        order = await repo.order(session, order.id)
+        await call.message.edit_reply_markup(reply_markup=admin_order_kb(order))
+        return
+
+    await call.answer(reply, show_alert="⚠" in reply)
+    if is_final(order.status):
+        await call.message.edit_text(_order_card(order, history), reply_markup=None)
+    else:
+        await call.message.edit_reply_markup(reply_markup=admin_order_kb(order))
+
+
+@router.message(AdminOrderInput.track, F.text)
+@router.message(AdminOrderInput.cancel_reason, F.text)
+async def order_input(message: Message, session: AsyncSession, bot: Bot, state: FSMContext) -> None:
+    data = await state.get_data()
+    order = await repo.order(session, data["order_id"])
+    if order is None:
+        await state.clear()
+        await message.answer("Заказ не найден")
+        return
+    try:
+        note = validate_note(data["to_status"], order.delivery_method, message.text)
+    except ValueError as e:
+        await message.answer(f"{e}. Попробуй ещё раз или /cancel")
+        return
+
+    await state.clear()
+    try:
+        reply, order, history = await _finish_transition(
+            session, bot, message.from_user.id,
+            order.id, data["from_status"], data["to_status"], note,
+        )
+    except InvalidTransition as e:
+        await message.answer(f"Заказ уже в статусе {status_ru(e.current)}, ничего не менял")
+        return
+    await message.answer(
+        reply + "\n\n" + _order_card(order, history),
+        reply_markup=admin_order_kb(order) if not is_final(order.status) else None,
+    )
 
 
 @router.message(Command("addcat"))
