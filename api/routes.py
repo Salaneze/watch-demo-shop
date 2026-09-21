@@ -16,6 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import InitDataError, WebAppUser, init_data_from_header, parse_init_data
 from api.schemas import (
+    AiIn,
+    AiOut,
+    AiStatus,
     CartLine,
     CartOut,
     CartPatch,
@@ -35,10 +38,12 @@ from api.schemas import (
 )
 from api.session import deep_link, issue_token, read_token
 from api.session import store as login_store
+from bot.ai.tools import ToolContext
 from bot.config import settings
 from bot.db import repo
 from bot.db.base import session_factory
 from bot.db.models import Product, status_ru
+from bot.handlers.ai import get_agent
 from bot.utils.delivery import (
     DELIVERY_OPTIONS,
     delivery_option,
@@ -411,3 +416,38 @@ async def product_image(product_id: int, request: Request, session: Session,
 
     return FileResponse(path, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ---------- ИИ-консультант ----------
+# Вторая дверь к тому же агенту, что и в чате бота: инструменты, история и
+# лимит раундов общие, витрине остаётся только транспорт. История хранится по
+# user_id, поэтому диалог, начатый в боте, продолжается в витрине и наоборот.
+
+
+@router.get("/ai", response_model=AiStatus)
+async def ai_status() -> AiStatus:
+    return AiStatus(enabled=bool(settings.ai_provider))
+
+
+@router.post("/ai/chat", response_model=AiOut)
+async def ai_chat(data: AiIn, request: Request, user: CurrentUser, session: Session) -> AiOut:
+    agent = get_agent()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Консультант выключен")
+    ctx = ToolContext(
+        session=session,
+        bot=request.app.state.bot,
+        user_id=user.id,
+        user_name=user.full_name,
+    )
+    reply = await agent.ask(ctx, data.message)
+    return AiOut(reply=reply, cart=await _cart_out(session, user.id, []))
+
+
+@router.post("/ai/reset", response_model=AiStatus)
+async def ai_reset(user: CurrentUser) -> AiStatus:
+    agent = get_agent()
+    if agent is not None:
+        agent.reset(user.id)
+    return AiStatus(enabled=agent is not None)
+

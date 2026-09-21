@@ -70,6 +70,31 @@ class PromoIn(BaseModel):
     code: str = Field(max_length=32)
 
 
+class AiStatus(BaseModel):
+    enabled: bool
+
+
+class AiIn(BaseModel):
+    # Потолок по длине — не про UX, а про счёт: каждый символ уходит модели,
+    # и без лимита один клиент может слать в неё по абзацу текста.
+    message: str = Field(min_length=1, max_length=500)
+
+    @field_validator("message")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("Пустое сообщение")
+        return v
+
+
+class AiOut(BaseModel):
+    reply: str
+    # Корзина в ответе всегда: модель могла положить туда товар, и витрине
+    # дешевле обновить бейдж из этого же ответа, чем делать второй запрос.
+    cart: CartOut
+
+
 class CartLine(BaseModel):
     product_id: int
     title: str

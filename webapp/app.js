@@ -26,6 +26,7 @@ const state = {
   error: '',
   session: '',                // сессия для клиентов без initData
   authorized: false,
+  ai: { enabled: false, messages: [], busy: false },  // консультант; история только на экране
 };
 
 /* ---------- мелкие помощники ---------- */
@@ -211,6 +212,11 @@ function hero() {
 function filterBar() {
   const sortIndex = SORTS.findIndex(s => s.key === state.sort);
   return el('div', { class: 'filters' }, [
+    state.ai.enabled && el('button', {
+      class: 'chip',
+      text: '🤖 Консультант',
+      onclick: () => go('ai'),
+    }),
     el('button', {
       class: `chip${state.onlyFavorites ? ' chip--on' : ''}`,
       text: `♡ Избранное${state.favorites.size ? ` · ${state.favorites.size}` : ''}`,
@@ -635,6 +641,77 @@ function screenDone() {
 
 /* ---------- отрисовка ---------- */
 
+/* ---------- консультант ---------- */
+
+/* Поле ввода — один узел на всё время, по той же причине, что и поиск:
+   пересозданный input на iOS теряет фокус вместе с клавиатурой. */
+let aiInputNode = null;
+
+function aiInput() {
+  if (!aiInputNode) {
+    aiInputNode = el('input', {
+      class: 'ai-input',
+      type: 'text',
+      placeholder: 'Спросите про часы…',
+      enterkeyhint: 'send',
+      maxlength: '500',
+      onkeydown: (e) => { if (e.key === 'Enter') sendToAi(); },
+    });
+  }
+  return aiInputNode;
+}
+
+async function sendToAi() {
+  const text = (aiInputNode?.value || '').trim();
+  if (!text || state.ai.busy) return;
+  aiInputNode.value = '';
+  state.ai.messages.push({ me: true, text });
+  state.ai.busy = true;
+  haptic();
+  render();
+  try {
+    const res = await api('/ai/chat', { method: 'POST', body: JSON.stringify({ message: text }) });
+    state.ai.messages.push({ me: false, text: res.reply });
+    state.cart = res.cart;  // модель могла положить товар — бейдж корзины из того же ответа
+  } catch (e) {
+    if (e.status === 401) { state.ai.busy = false; startLogin(); return; }
+    state.ai.messages.push({ me: false, text: e.message, bad: true });
+  }
+  state.ai.busy = false;
+  render();
+}
+
+async function resetAi() {
+  state.ai.messages = [];
+  haptic();
+  render();
+  try { await api('/ai/reset', { method: 'POST' }); } catch { /* история и так только на экране */ }
+}
+
+function screenAi() {
+  const log = el('div', { class: 'ai-log' }, [
+    el('div', { class: 'msg msg--bot', text: 'Я консультант магазина: помогу подобрать часы, расскажу о наличии, положу в корзину.' }),
+    ...state.ai.messages.map(m =>
+      el('div', { class: `msg ${m.me ? 'msg--me' : 'msg--bot'}${m.bad ? ' msg--bad' : ''}`, text: m.text })),
+    state.ai.busy && el('div', { class: 'msg msg--bot msg--typing', text: '…' }),
+  ]);
+  const bar = el('div', { class: 'ai-bar' }, [
+    aiInput(),
+    el('button', { class: 'ai-send', text: '➤', 'aria-label': 'Отправить', onclick: sendToAi }),
+  ]);
+  const head = el('div', { class: 'ai-head' }, [
+    el('div', { class: 'ai-title', text: 'Консультант' }),
+    state.ai.messages.length ? el('button', { class: 'chip', text: 'Заново', onclick: resetAi }) : null,
+  ]);
+
+  // Нижнюю кнопку Telegram прячем: она легла бы ровно на панель ввода.
+  // Корзина в одном шаге назад, и её бейдж там уже свежий.
+  setMain('', null);
+  // Новое сообщение — прокрутка вниз, когда узлы уже в документе.
+  requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
+  return [head, log, bar];
+}
+
 function render() {
   app.replaceChildren();
 
@@ -648,6 +725,7 @@ function render() {
     cart: screenCart,
     checkout: screenCheckout,
     done: screenDone,
+    ai: screenAi,
   };
   for (const node of screens[state.screen]()) {
     if (node) app.append(node);
@@ -659,7 +737,7 @@ function render() {
 }
 
 function goBack() {
-  const from = { product: 'catalog', cart: 'catalog', checkout: 'cart' };
+  const from = { product: 'catalog', cart: 'catalog', checkout: 'cart', ai: 'catalog' };
   go(from[state.screen] || 'catalog');
 }
 
@@ -798,6 +876,10 @@ async function boot() {
     const favorites = await api('/favorites');
     state.favorites = new Set(favorites.map(p => p.id));
   } catch { /* сердечки — не повод не открыть магазин */ }
+
+  try {
+    state.ai.enabled = (await api('/ai')).enabled;
+  } catch { /* без консультанта витрина остаётся витриной */ }
 
   const user = tg?.initDataUnsafe?.user;
   if (user) {

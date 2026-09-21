@@ -96,6 +96,7 @@ body {
 
 .badge {
   position: absolute;
+  top: 0; right: 0;  /* левый угол занят сердечком: там они накладывались */
   margin: 6px;
   padding: 2px 7px;
   border-radius: 999px;
@@ -294,8 +295,13 @@ body {
 /* Крестик очистки в WebKit рисуется тёмным на тёмном — прячем, поле короткое. */
 .search::-webkit-search-cancel-button { display: none; }
 
-.filters { display: flex; gap: 8px; padding: 0 12px; }
+/* Третья кнопка (консультант) в 375px уже не влезает — ряд листается,
+   как категории, а не переносится в две строки. */
+.filters { display: flex; gap: 8px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
+.filters::-webkit-scrollbar { display: none; }
 .chip {
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 7px 14px;
   border: 1px solid var(--separator);
   border-radius: 999px;
@@ -379,3 +385,60 @@ body {
   font-size: 17px;
   font-weight: 700;
 }
+
+/* ---------- консультант ---------- */
+
+.ai-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 4px;
+}
+.ai-title { font-size: 17px; font-weight: 600; }
+.ai-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px 72px;  /* низ — под панель ввода */
+}
+.msg {
+  max-width: 85%;
+  padding: 9px 12px;
+  border-radius: 16px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.msg--bot { align-self: flex-start; background: var(--secondary-bg); border-bottom-left-radius: 4px; }
+.msg--me { align-self: flex-end; background: var(--button); color: var(--button-text); border-bottom-right-radius: 4px; }
+.msg--bad { color: var(--destructive); }
+.msg--typing { color: var(--hint); letter-spacing: 2px; }
+.ai-bar {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  border-top: 1px solid var(--separator);
+}
+.ai-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--separator);
+  border-radius: 999px;
+  background: var(--section-bg);
+  color: var(--text);
+  font: inherit;
+}
+.ai-input:focus { outline: none; border-color: var(--button); }
+.ai-send {
+  width: 42px; height: 42px;
+  border: none;
+  border-radius: 50%;
+  background: var(--button);
+  color: var(--button-text);
+  font-size: 16px;
+  cursor: pointer;
+}
+

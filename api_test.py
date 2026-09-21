@@ -340,9 +340,81 @@ async def seed_art() -> None:
         check("картинка не пустая", len(r.content) > 5000, f"{len(r.content)} байт")
 
 
+async def consultant() -> None:
+    """Консультант из витрины: тот же агент, что в боте, через HTTP.
+
+    Модель подменена сценарием, чтобы проверить транспорт, а не Gemini:
+    подпись обязательна, ответ несёт корзину, лимит на путь отдельный.
+    """
+    from api.limits import RULES
+    from api.routes import _cart_out  # noqa: F401  (путь существует)
+    from bot.ai.agent import Agent
+    from bot.ai.provider import FakeProvider, Reply
+    from bot.handlers import ai as ai_handlers
+
+    print("\n[13] Консультант в витрине")
+    check("у консультанта свой лимит строже общего",
+          any(p == "POST /api/ai" and n < 120 for p, n, _ in RULES), str(RULES))
+
+    app = create_test_app()
+
+    class Bot:
+        sent: list = []
+
+        async def send_message(self, chat_id, text, **kw):
+            self.sent.append((chat_id, text))
+
+    app.state.bot = Bot()
+    transport = httpx.ASGITransport(app=app)
+    buyer = make_init_data()
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        ai_handlers.set_agent(None)
+        r = await c.get("/api/ai")
+        check("статус публичный", r.status_code == 200 and r.json() == {"enabled": False}, r.text)
+        r = await c.post("/api/ai/chat", json={"message": "привет"}, headers=headers(buyer))
+        check("выключенный консультант — 404", r.status_code == 404, f"код {r.status_code}")
+
+        async with session_factory() as s:
+            cats = await repo.active_categories(s)
+            product = (await repo.products_in_category(s, cats[0].id))[0]
+        llm = FakeProvider([
+            Reply(tool_name="add_to_cart", tool_args={"product_id": product.id}),
+            Reply(text="Положил в корзину"),
+        ])
+        ai_handlers.set_agent(Agent(llm))
+        try:
+            r = await c.post("/api/ai/chat", json={"message": "хочу вот эти"})
+            check("без подписи — 401", r.status_code == 401, f"код {r.status_code}")
+            check("модель не дёргалась без подписи", len(llm.calls) == 0, str(len(llm.calls)))
+            r = await c.post("/api/ai/chat", json={"message": "   "}, headers=headers(buyer))
+            check("пустое сообщение — 422", r.status_code == 422, f"код {r.status_code}")
+            r = await c.post("/api/ai/chat", json={"message": "x" * 501}, headers=headers(buyer))
+            check("длинное сообщение — 422", r.status_code == 422, f"код {r.status_code}")
+
+            r = await c.post("/api/ai/chat", json={"message": "хочу вот эти"}, headers=headers(buyer))
+            check("ответ 200", r.status_code == 200, r.text[:120])
+            body = r.json()
+            check("текст модели дошёл", body.get("reply") == "Положил в корзину", str(body)[:120])
+            check("корзина в ответе с товаром",
+                  [l["product_id"] for l in body["cart"]["lines"]] == [product.id], str(body["cart"])[:120])
+            check("сообщение дошло до модели",
+                  llm.calls and llm.calls[0][-1]["content"] == "хочу вот эти", str(llm.calls[0][-1]))
+            r = await c.get("/api/cart", headers=headers(buyer))
+            check("та же корзина по обычному пути", r.json()["lines"][0]["product_id"] == product.id)
+
+            r = await c.post("/api/ai/reset", headers=headers(buyer))
+            check("сброс истории отвечает", r.status_code == 200 and r.json()["enabled"] is True, r.text)
+            r = await c.post("/api/ai/reset")
+            check("сброс без подписи — 401", r.status_code == 401, f"код {r.status_code}")
+        finally:
+            ai_handlers.set_agent(None)
+            await c.delete("/api/cart", headers=headers(buyer))
+
+
 asyncio.run(endpoints())
 asyncio.run(healthcheck())
 asyncio.run(seed_art())
+asyncio.run(consultant())
 
 print(f"\n{'=' * 44}\nOK: {ok}   FAIL: {fail}\n{'=' * 44}")
 raise SystemExit(1 if fail else 0)
