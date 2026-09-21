@@ -180,11 +180,22 @@ class GeminiProvider:
             ]}]
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             # Ключ в заголовке, не в query: httpx печатает URL в исключениях и логах.
-            r = await client.post(
-                self.URL.format(model=self._model),
-                headers={"x-goog-api-key": self._key},
-                json=body,
-            )
+            # Один повтор на таймаут и 5xx: в живом прогоне 21.09 первый же
+            # вопрос упал по ReadTimeout, и клиент увидел «что-то пошло не так»
+            # из-за сетевого чиха. Повторять 4xx смысла нет — там наша ошибка.
+            for attempt in (1, 2):
+                try:
+                    r = await client.post(
+                        self.URL.format(model=self._model),
+                        headers={"x-goog-api-key": self._key},
+                        json=body,
+                    )
+                except httpx.TimeoutException:
+                    if attempt == 2:
+                        raise
+                    continue
+                if r.status_code < 500 or attempt == 2:
+                    break
         if r.status_code >= 400:
             raise RuntimeError(f"Gemini {r.status_code}: {r.text[:300]}")
         parts = r.json()["candidates"][0]["content"].get("parts", [])
