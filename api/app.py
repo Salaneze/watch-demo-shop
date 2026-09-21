@@ -126,10 +126,14 @@ async def lifespan(app: FastAPI):
     polling: asyncio.Task | None = None
     if webhook:
         url = settings.public_url + settings.webhook_path
+        # Очередь НЕ сбрасываем. На засыпающем хостинге первое сообщение
+        # пользователя и есть то, что будит контейнер: Telegram не дожидается
+        # ответа за время старта и ставит апдейт на повтор — а drop_pending
+        # выкидывал его при подъёме. Каждое первое сообщение после сна
+        # пропадало молча (21.09, «бот не отвечает» при чистых логах).
         await bot.set_webhook(
             url=url,
             secret_token=settings.webhook_secret,
-            drop_pending_updates=True,
             allowed_updates=dp.resolve_used_update_types(),
         )
         # Путь в лог не пишем целиком: он и есть половина секрета.
