@@ -56,15 +56,25 @@ async def search_products(ctx: ToolContext, args: dict[str, Any]) -> str:
     query = str(args.get("query") or "").strip()
     max_price = args.get("max_price")
     found: list[Product] = []
-    for c in await repo.active_categories(ctx.session):
-        found += await repo.products_in_category(ctx.session, c.id, query=query)
+    categories = await repo.active_categories(ctx.session)
+    for c in categories:
+        # Слово из названия категории («Automatic») — тоже попадание: у товаров
+        # в названиях бренды и модели, а клиент спрашивает «механику».
+        by_category = query and query.lower() in c.title.lower()
+        found += await repo.products_in_category(
+            ctx.session, c.id, query="" if by_category else query,
+        )
     # Пустой запрос — модель хочет «показать что есть»: отдаём каталог целиком,
     # но в пределах лимита, чтобы в контекст не уехали сотни позиций.
     if isinstance(max_price, (int, float)):
         found = [p for p in found if p.price <= max_price]
     found.sort(key=lambda p: p.price)
     if not found:
-        return "Ничего не найдено. Предложи уточнить запрос или посмотреть другие категории."
+        # Живой прогон 21.09: на «механику до 500» модель получила пустоту и
+        # сдалась, хотя категория Automatic была. Подсказываем, чем искать.
+        names = ", ".join(c.title.split(" ", 1)[-1] for c in categories)
+        return (f"Ничего не найдено. Категории каталога: {names}. "
+                "Попробуй query по названию категории или пустой query с max_price.")
     lines = [_product_line(p) for p in found[:SEARCH_LIMIT]]
     if len(found) > SEARCH_LIMIT:
         lines.append(f"…и ещё {len(found) - SEARCH_LIMIT}, уточни запрос")

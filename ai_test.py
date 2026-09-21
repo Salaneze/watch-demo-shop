@@ -82,6 +82,14 @@ async def run() -> None:
         out = await tools.run("search_products", ctx, {"query": "", "max_price": cheapest.price})
         check("бюджет режет по цене", out.strip() == tools._product_line(cheapest), out)
 
+        cats = await repo.active_categories(s)
+        cat = next(c for c in cats if c.id == cheapest.category_id)
+        word = cat.title.split(" ", 1)[-1]
+        out = await tools.run("search_products", ctx, {"query": word.lower()})
+        check("название категории ищет её товары", f"#{cheapest.id} " in out, out[:120])
+        out = await tools.run("search_products", ctx, {"query": "zzz-нет-такого"})
+        check("пустой результат подсказывает категории", word in out and "max_price" in out, out)
+
         out = await tools.run("product_details", ctx, {"product_id": hidden.id})
         check("детали выключенного — «нет»", out == "Такого товара нет.", out)
 
