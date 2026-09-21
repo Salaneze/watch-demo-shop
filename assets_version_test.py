@@ -40,7 +40,9 @@ def run() -> None:
     check("отпечаток непустой", len(version) == 8, version)
     check("метка попала в app.js", f"app.js?v={version}" in html, html[:200])
     check("метка попала в style.css", f"style.css?v={version}" in html, html[:200])
-    check("ручной ?v= не остался", "?v=5" not in html)
+    # Сверка с кавычкой: отпечаток 5fb4051a начинается с «5», и голое «?v=5»
+    # ложно краснело на честной метке.
+    check("ручной ?v= не остался", '?v=5"' not in html)
     # 21.09: комментарий в index.html упоминает `?v=`, и подмена по всему файлу
     # съела `<link rel=` вместе с телом страницы. Проверяем именно разметку.
     check("link остался на месте", '<link rel="stylesheet" href="/style.css?v=' in html)
