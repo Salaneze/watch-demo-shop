@@ -72,7 +72,13 @@ def index_html() -> str:
     version = asset_version()
     if _index_cache is None or _index_cache[0] != version:
         raw = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
-        _index_cache = (version, re.sub(r"\?v=[^\"']*", f"?v={version}", raw))
+        # Только внутри href/src: жадный `\?v=[^"]*` однажды дотянулся от `?v=`
+        # в HTML-комментарии до кавычки `<link rel=` и вынес всю страницу в
+        # комментарий — прод отдавал пустой body без единой ошибки в логах.
+        _index_cache = (
+            version,
+            re.sub(r'((?:href|src)="/[^"?]+\?v=)[^"]*', rf"\g<1>{version}", raw),
+        )
     return _index_cache[1]
 
 

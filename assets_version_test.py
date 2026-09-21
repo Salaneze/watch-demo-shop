@@ -41,6 +41,11 @@ def run() -> None:
     check("метка попала в app.js", f"app.js?v={version}" in html, html[:200])
     check("метка попала в style.css", f"style.css?v={version}" in html, html[:200])
     check("ручной ?v= не остался", "?v=5" not in html)
+    # 21.09: комментарий в index.html упоминает `?v=`, и подмена по всему файлу
+    # съела `<link rel=` вместе с телом страницы. Проверяем именно разметку.
+    check("link остался на месте", '<link rel="stylesheet" href="/style.css?v=' in html)
+    check("script остался на месте", '<script src="/app.js?v=' in html)
+    check("тело страницы отдаётся", 'id="app"' in html and "<!-- " in html and " -->" in html)
 
     print("\n[2] Правка файла меняет метку")
     target = WEBAPP_DIR / VERSIONED_ASSETS[0]
