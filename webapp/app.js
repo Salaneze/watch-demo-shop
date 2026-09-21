@@ -26,7 +26,7 @@ const state = {
   error: '',
   session: '',                // сессия для клиентов без initData
   authorized: false,
-  ai: { enabled: false, messages: [], busy: false },  // консультант; история только на экране
+  ai: { enabled: false, open: false, messages: [], busy: false },  // консультант; история только на экране
 };
 
 /* ---------- мелкие помощники ---------- */
@@ -212,11 +212,6 @@ function hero() {
 function filterBar() {
   const sortIndex = SORTS.findIndex(s => s.key === state.sort);
   return el('div', { class: 'filters' }, [
-    state.ai.enabled && el('button', {
-      class: 'chip',
-      text: '🤖 Консультант',
-      onclick: () => go('ai'),
-    }),
     el('button', {
       class: `chip${state.onlyFavorites ? ' chip--on' : ''}`,
       text: `♡ Избранное${state.favorites.size ? ` · ${state.favorites.size}` : ''}`,
@@ -688,7 +683,16 @@ async function resetAi() {
   try { await api('/ai/reset', { method: 'POST' }); } catch { /* история и так только на экране */ }
 }
 
-function screenAi() {
+function toggleAi(open) {
+  state.ai.open = open;
+  haptic();
+  render();
+  if (open) requestAnimationFrame(() => aiInputNode?.focus());
+}
+
+/* Чат — шторка поверх текущего экрана, а не отдельный экран: каталог под ней
+   остаётся, закрыл — продолжаешь листать с того же места. */
+function aiPanel() {
   const log = el('div', { class: 'ai-log' }, [
     el('div', { class: 'msg msg--bot', text: 'Я консультант магазина: помогу подобрать часы, расскажу о наличии, положу в корзину.' }),
     ...state.ai.messages.map(m =>
@@ -701,15 +705,27 @@ function screenAi() {
   ]);
   const head = el('div', { class: 'ai-head' }, [
     el('div', { class: 'ai-title', text: 'Консультант' }),
-    state.ai.messages.length ? el('button', { class: 'chip', text: 'Заново', onclick: resetAi }) : null,
+    el('div', { class: 'ai-head-actions' }, [
+      state.ai.messages.length ? el('button', { class: 'chip', text: 'Заново', onclick: resetAi }) : null,
+      el('button', { class: 'ai-close', text: '✕', 'aria-label': 'Закрыть', onclick: () => toggleAi(false) }),
+    ]),
   ]);
 
-  // Нижнюю кнопку Telegram прячем: она легла бы ровно на панель ввода.
-  // Корзина в одном шаге назад, и её бейдж там уже свежий.
-  setMain('', null);
   // Новое сообщение — прокрутка вниз, когда узлы уже в документе.
-  requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
-  return [head, log, bar];
+  requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
+  return el('div', { class: 'ai-sheet' }, [
+    el('div', { class: 'ai-backdrop', onclick: () => toggleAi(false) }),
+    el('div', { class: 'ai-panel' }, [head, log, bar]),
+  ]);
+}
+
+function aiFab() {
+  return el('button', {
+    class: 'ai-fab',
+    text: '🤖',
+    'aria-label': 'Консультант',
+    onclick: () => toggleAi(true),
+  });
 }
 
 function render() {
@@ -725,19 +741,27 @@ function render() {
     cart: screenCart,
     checkout: screenCheckout,
     done: screenDone,
-    ai: screenAi,
   };
   for (const node of screens[state.screen]()) {
     if (node) app.append(node);
   }
 
+  // Консультант живёт поверх любого экрана. Кнопка — только когда есть кому
+  // отвечать и человек вошёл: без подписи API всё равно ответит 401.
+  if (state.ai.enabled && state.authorized && state.screen !== 'done') {
+    app.append(state.ai.open ? aiPanel() : aiFab());
+  }
+  // Нижнюю кнопку Telegram прячем под шторкой: она легла бы ровно на поле ввода.
+  if (state.ai.open) setMain('', null);
+
   // Своего хедера с крестиком нет: назад — встроенная кнопка Telegram.
   const back = tg?.BackButton;
-  if (back) state.screen === 'catalog' || state.screen === 'done' ? back.hide() : back.show();
+  if (back) (state.screen === 'catalog' || state.screen === 'done') && !state.ai.open ? back.hide() : back.show();
 }
 
 function goBack() {
-  const from = { product: 'catalog', cart: 'catalog', checkout: 'cart', ai: 'catalog' };
+  if (state.ai.open) { toggleAi(false); return; }
+  const from = { product: 'catalog', cart: 'catalog', checkout: 'cart' };
   go(from[state.screen] || 'catalog');
 }
 

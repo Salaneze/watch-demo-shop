@@ -21,7 +21,7 @@
 
 body {
   margin: 0;
-  padding: 0 0 24px;
+  padding: 0 0 88px;  /* запас под плавающую кнопку консультанта */
   background: var(--bg);
   color: var(--text);
   font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
@@ -388,18 +388,63 @@ body {
 
 /* ---------- консультант ---------- */
 
+/* Плавающая кнопка: чат нужен «вдруг», на любом экране, поэтому не в ряду
+   фильтров, где он читается как ещё один фильтр. Правый нижний угол —
+   под большой палец. */
+.ai-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 20;
+  width: 52px; height: 52px;
+  border: none;
+  border-radius: 50%;
+  background: var(--button);
+  color: var(--button-text);
+  font-size: 24px;
+  line-height: 52px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+  cursor: pointer;
+}
+.ai-sheet { position: fixed; inset: 0; z-index: 30; }
+.ai-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .4); }
+.ai-panel {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 78vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, .2);
+  animation: ai-up .18s ease-out;
+}
+@keyframes ai-up { from { transform: translateY(24px); opacity: .6; } to { transform: none; opacity: 1; } }
 .ai-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 12px 4px;
+  padding: 12px 12px 8px;
+  border-bottom: 1px solid var(--separator);
 }
+.ai-head-actions { display: flex; align-items: center; gap: 8px; }
 .ai-title { font-size: 17px; font-weight: 600; }
+.ai-close {
+  width: 32px; height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: var(--secondary-bg);
+  color: var(--text);
+  font-size: 14px;
+  cursor: pointer;
+}
 .ai-log {
+  flex: 1;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 12px 72px;  /* низ — под панель ввода */
+  padding: 12px;
 }
 .msg {
   max-width: 85%;
@@ -413,12 +458,9 @@ body {
 .msg--bad { color: var(--destructive); }
 .msg--typing { color: var(--hint); letter-spacing: 2px; }
 .ai-bar {
-  position: fixed;
-  left: 0; right: 0; bottom: 0;
   display: flex;
   gap: 8px;
   padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
-  background: var(--bg);
   border-top: 1px solid var(--separator);
 }
 .ai-input {
@@ -441,4 +483,3 @@ body {
   font-size: 16px;
   cursor: pointer;
 }
-
