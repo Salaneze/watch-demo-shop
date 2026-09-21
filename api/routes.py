@@ -35,6 +35,7 @@ from api.schemas import (
     ProductOut,
     PromoIn,
     PromoOut,
+    StatusEntryOut,
 )
 from api.session import deep_link, issue_token, read_token
 from api.session import store as login_store
@@ -49,6 +50,13 @@ from bot.utils.delivery import (
     delivery_option,
     discount_for,
     resolve_promo,
+)
+from bot.utils.lifecycle import (
+    CUSTOMER_CANCEL_NOTE,
+    CUSTOMER_MAY_CANCEL_FROM,
+    InvalidTransition,
+    apply_transition,
+    is_final,
 )
 from bot.utils.money import fmt
 from bot.utils.seed import seed_art_path
@@ -297,7 +305,7 @@ async def cart_clear(user: CurrentUser, session: Session) -> CartOut:
     return await _cart_out(session, user.id, [])
 
 
-def _order_out(order) -> OrderOut:
+def _order_out(order, history=None) -> OrderOut:
     # Заказы, оформленные до появления доставки, лежат в базе без разбивки:
     # items_total у них 0, поэтому за сумму товаров берём общий итог.
     items_total = order.items_total or order.total
@@ -312,6 +320,15 @@ def _order_out(order) -> OrderOut:
         id=order.id,
         status=str(order.status),
         status_text=status_ru(order.status),
+        can_cancel=str(order.status) in CUSTOMER_MAY_CANCEL_FROM,
+        is_final=is_final(order.status),
+        history=[
+            StatusEntryOut(
+                status=h.status, status_text=status_ru(h.status), actor=h.actor,
+                note=h.note, created_at=h.created_at.isoformat(),
+            )
+            for h in (history or [])
+        ],
         items_total=items_total,
         items_total_text=fmt(items_total),
         discount=order.discount,
@@ -361,6 +378,41 @@ async def create_order(data: OrderIn, request: Request, user: CurrentUser,
 async def my_orders(user: CurrentUser, session: Session) -> list[OrderOut]:
     orders = await repo.orders_by_user(session, user.id, limit=10)
     return [_order_out(o) for o in orders]
+
+
+async def _own_order(session: AsyncSession, user_id: int, order_id: int):
+    # Чужой заказ и несуществующий — один и тот же 404: номера идут подряд,
+    # и 403 подсказал бы перебирающему, какие из них существуют.
+    order = await repo.order(session, order_id)
+    if order is None or order.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Заказ не найден")
+    return order
+
+
+@router.get("/orders/{order_id}", response_model=OrderOut)
+async def my_order(order_id: int, user: CurrentUser, session: Session) -> OrderOut:
+    order = await _own_order(session, user.id, order_id)
+    return _order_out(order, await repo.history_for(session, order.id))
+
+
+@router.post("/orders/{order_id}/cancel", response_model=OrderOut)
+async def cancel_order(order_id: int, request: Request, user: CurrentUser,
+                       session: Session) -> OrderOut:
+    order = await _own_order(session, user.id, order_id)
+    try:
+        order, _ = await apply_transition(
+            session, order.id, str(order.status), "cancelled",
+            actor="customer", actor_id=user.id, note=CUSTOMER_CANCEL_NOTE,
+        )
+    except InvalidTransition as exc:
+        # 409: витрина покажет текст и перезапросит заказ.
+        raise HTTPException(
+            status_code=409, detail=f"Заказ уже в статусе {status_ru(exc.current)}",
+        )
+    notify = getattr(request.app.state, "notify_admins_cancel", None)
+    if notify is not None:
+        await notify(order)
+    return _order_out(order, await repo.history_for(session, order.id))
 
 
 @router.get("/img/{product_id}/{index}")

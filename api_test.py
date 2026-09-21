@@ -277,6 +277,34 @@ async def endpoints() -> None:
         r = await c.get("/api/orders", headers=headers(other))
         check("чужой заказ не виден", r.json() == [], r.text[:160])
 
+        print("\n[9a] Жизненный цикл: история и самоотмена через API")
+        listed = (await c.get("/api/orders", headers=headers(buyer))).json()[0]
+        check("в списке есть can_cancel/is_final и нет истории",
+              listed["can_cancel"] is True and listed["is_final"] is False and listed["history"] == [],
+              str({k: listed.get(k) for k in ("can_cancel", "is_final", "history")}))
+        r = await c.get(f"/api/orders/{order['id']}", headers=headers(buyer))
+        check("свой заказ по id — 200 с историей", r.status_code == 200 and len(r.json()["history"]) == 1,
+              r.text[:160])
+        entry = r.json()["history"][0]
+        check("в записи нет notified/actor_id", "notified" not in entry and "actor_id" not in entry, str(entry))
+        r = await c.get(f"/api/orders/{order['id']}", headers=headers(other))
+        check("чужой заказ по id — 404", r.status_code == 404, f"код {r.status_code}")
+        r = await c.get("/api/orders/999999", headers=headers(buyer))
+        check("несуществующий — 404", r.status_code == 404, f"код {r.status_code}")
+        r = await c.post(f"/api/orders/{order['id']}/cancel", headers=headers(other))
+        check("чужой cancel — 404", r.status_code == 404, f"код {r.status_code}")
+        r = await c.post(f"/api/orders/{order['id']}/cancel", headers=headers(buyer))
+        body = r.json()
+        check("свой cancel — 200 и cancelled", r.status_code == 200 and body["status"] == "cancelled", r.text[:160])
+        check("история: создание + отмена покупателем",
+              [h["actor"] for h in body["history"]] == ["customer", "customer"]
+              and "покупателем" in body["history"][-1]["note"], str(body["history"]))
+        check("после отмены can_cancel=false, is_final=true",
+              body["can_cancel"] is False and body["is_final"] is True)
+        r = await c.post(f"/api/orders/{order['id']}/cancel", headers=headers(buyer))
+        check("повторный cancel — 409 с русским статусом",
+              r.status_code == 409 and "отменён" in r.json()["detail"], r.text[:160])
+
         print("\n[10] Снятый с продажи товар")
         async with session_factory() as s:
             await repo.cart_add(s, 555000111, first["id"], 1)

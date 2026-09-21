@@ -30,7 +30,10 @@ from aiogram.fsm.storage.memory import MemoryStorage  # noqa: E402
 
 from bot.db import repo  # noqa: E402
 from bot.db.base import init_db, session_factory  # noqa: E402
-from bot.handlers import checkout  # noqa: E402
+from api.routes import _order_out  # noqa: E402
+from bot.handlers import checkout, common  # noqa: E402
+from bot.keyboards.callbacks import CustomerOrderCB  # noqa: E402
+from bot.utils.lifecycle import apply_transition  # noqa: E402
 from bot.handlers.catalog import CAPTION_LIMIT, product_caption  # noqa: E402
 from bot.states import Checkout  # noqa: E402
 from bot.utils.notify import order_text  # noqa: E402
@@ -268,6 +271,27 @@ async def run() -> None:
         print("\n[7] Регресс: чек об оплате доходит до админа")
         check("admin_order_kb импортирован в checkout",
               getattr(checkout, "admin_order_kb", None) is not None)
+
+        print("\n[8] Заказы: чат и витрина показывают один статус и одну историю")
+        # Заказ из [1] переводим админом, потом смотрим глазами покупателя в обоих входах.
+        moved, _ = await apply_transition(s, order.id, str(order.status), "paid",
+                                          actor="admin", actor_id=1)
+        chat_msg = FakeMessage("📦 Мои заказы", uid)
+        await common.my_orders(chat_msg, s)
+        api_view = _order_out(moved, await repo.history_for(s, moved.id))
+        check("статус в чате = status_text витрины", api_view.status_text in chat_msg.all_text,
+              chat_msg.all_text)
+        hist_call = FakeCall("cord:history", chat_msg)
+        await common.order_history(hist_call, CustomerOrderCB(order_id=moved.id, action="history"), s)
+        chat_hist = chat_msg.last
+        check("история в чате той же длины, что в API",
+              chat_hist.count("\n") == len(api_view.history), chat_hist)
+        check("последняя запись совпадает",
+              api_view.history[-1].status_text in chat_hist.splitlines()[-1], chat_hist)
+        foreign = FakeCall("cord:history", FakeMessage("", 700100299))
+        await common.order_history(foreign, CustomerOrderCB(order_id=moved.id, action="history"), s)
+        check("чужая история из чата не раскрывается", "не найден" in " ".join(foreign.alerts),
+              str(foreign.alerts))
 
     print("\n" + "=" * 46)
     print(f"OK: {ok}   FAIL: {fail}")

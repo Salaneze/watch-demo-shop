@@ -237,6 +237,12 @@ body {
 }
 .order-head { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
 .order-line { font-size: 13px; color: var(--hint); }
+.order-status { font-size: 14px; margin-bottom: 6px; }
+.order-actions { display: flex; gap: 8px; margin-top: 10px; }
+.chip--danger { color: var(--destructive); border-color: var(--destructive); }
+.history { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--separator); font-size: 13px; }
+.history-line { display: flex; gap: 10px; padding: 3px 0; }
+.history-time { flex: 0 0 auto; color: var(--hint); font-variant-numeric: tabular-nums; }
 
 /* ---------- скелет загрузки ---------- */
 

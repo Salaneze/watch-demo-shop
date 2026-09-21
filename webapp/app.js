@@ -11,6 +11,9 @@ const state = {
   catalog: null,
   cart: null,
   orders: null,
+  histories: {},              // id заказа -> история, грузится по клику
+  openHistory: new Set(),     // раскрытые истории
+  lastOrder: null,
   activeCategory: null,
   product: null,
   gallery: 0,                 // текущий кадр на карточке товара
@@ -138,6 +141,72 @@ function go(screen) {
   haptic();
   render();
   window.scrollTo(0, 0);
+  // Статусы меняет админ из бота, а экран заказов у покупателя может висеть
+  // открытым — раз в 30 с перечитываем список. Ушёл с экрана — снимаем.
+  clearInterval(ordersTimer);
+  ordersTimer = screen === 'orders' ? setInterval(refreshOrders, 30000) : null;
+}
+
+let ordersTimer = null;
+
+async function refreshOrders() {
+  try {
+    state.orders = await api('/orders');
+    // Раскрытые истории перечитываем тоже: новая запись могла появиться.
+    for (const id of state.openHistory) {
+      state.histories[id] = (await api(`/orders/${id}`)).history;
+    }
+    if (state.screen === 'orders') render();
+  } catch (e) {
+    if (e.status === 401) { clearInterval(ordersTimer); startLogin(); }
+  }
+}
+
+async function openOrders() {
+  state.orders = null;
+  go('orders');
+  try {
+    state.orders = await api('/orders');
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
+async function toggleHistory(id) {
+  haptic();
+  if (state.openHistory.has(id)) {
+    state.openHistory.delete(id);
+    render();
+    return;
+  }
+  try {
+    state.histories[id] = (await api(`/orders/${id}`)).history;
+    state.openHistory.add(id);
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
+async function cancelOrder(id) {
+  haptic('medium');
+  try {
+    const fresh = await api(`/orders/${id}/cancel`, { method: 'POST' });
+    state.orders = state.orders.map(o => o.id === id ? fresh : o);
+    state.histories[id] = fresh.history;
+    state.openHistory.add(id);
+    tg?.HapticFeedback?.notificationOccurred('success');
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    // 409 — статус ушёл дальше, пока экран висел: показываем причину и
+    // перечитываем, чтобы кнопка отмены исчезла вместе с правом на неё.
+    state.error = e.message;
+    await refreshOrders();
+  }
+  render();
 }
 
 /* ---------- поиск и сортировка ---------- */
@@ -212,6 +281,11 @@ function hero() {
 function filterBar() {
   const sortIndex = SORTS.findIndex(s => s.key === state.sort);
   return el('div', { class: 'filters' }, [
+    state.authorized ? el('button', {
+      class: 'chip',
+      text: '📦 Заказы',
+      onclick: () => { haptic(); openOrders(); },
+    }) : null,
     el('button', {
       class: `chip${state.onlyFavorites ? ' chip--on' : ''}`,
       text: `♡ Избранное${state.favorites.size ? ` · ${state.favorites.size}` : ''}`,
@@ -592,6 +666,7 @@ async function submitOrder() {
       }),
     });
     state.lastOrder = order;
+    state.orders = null;  // список заказов перечитается при следующем открытии
     state.cart = { lines: [], total: 0, total_text: '', removed: [] };
     state.promo = null;
     state.promoInput = '';
@@ -608,6 +683,56 @@ async function submitOrder() {
     render();
     window.scrollTo(0, 0);
   }
+}
+
+function historyTime(iso) {
+  const d = new Date(iso);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function orderCard(o) {
+  const open = state.openHistory.has(o.id);
+  const history = open ? (state.histories[o.id] || []) : [];
+  return el('div', { class: 'order' }, [
+    el('div', { class: 'order-head' }, [
+      el('span', { text: `Заказ #${o.id}` }),
+      el('span', { text: o.total_text }),
+    ]),
+    el('div', { class: 'order-status', text: o.status_text }),
+    ...o.items.map(i => el('div', { class: 'order-line', text: `${i.title} — ${i.qty} шт` })),
+    el('div', { class: 'order-actions' }, [
+      el('button', {
+        class: `chip${open ? ' chip--on' : ''}`,
+        text: open ? 'Скрыть историю' : '🕓 История',
+        onclick: () => toggleHistory(o.id),
+      }),
+      o.can_cancel ? el('button', {
+        class: 'chip chip--danger',
+        text: 'Отменить заказ',
+        onclick: () => cancelOrder(o.id),
+      }) : null,
+    ]),
+    open ? el('div', { class: 'history' }, history.map(h =>
+      el('div', { class: 'history-line' }, [
+        el('span', { class: 'history-time', text: historyTime(h.created_at) }),
+        el('span', { text: h.note ? `${h.status_text} — ${h.note}` : h.status_text }),
+      ]))) : null,
+  ]);
+}
+
+function screenOrders() {
+  setMain('', null);
+  if (state.orders === null) {
+    return [el('div', { class: 'empty' }, [el('span', { text: '⏳' }), el('div', { text: 'Загружаю заказы…' })])];
+  }
+  if (!state.orders.length) {
+    return [el('div', { class: 'empty' }, [el('span', { text: '📦' }), el('div', { text: 'Заказов пока нет' })])];
+  }
+  return [
+    el('div', { class: 'section-title', text: 'Мои заказы' }),
+    ...state.orders.map(orderCard),
+  ];
 }
 
 function screenDone() {
@@ -740,6 +865,7 @@ function render() {
     product: screenProduct,
     cart: screenCart,
     checkout: screenCheckout,
+    orders: screenOrders,
     done: screenDone,
   };
   for (const node of screens[state.screen]()) {
@@ -761,7 +887,7 @@ function render() {
 
 function goBack() {
   if (state.ai.open) { toggleAi(false); return; }
-  const from = { product: 'catalog', cart: 'catalog', checkout: 'cart' };
+  const from = { product: 'catalog', cart: 'catalog', checkout: 'cart', orders: 'catalog' };
   go(from[state.screen] || 'catalog');
 }
 

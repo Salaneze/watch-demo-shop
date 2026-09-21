@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from bot.utils.delivery import DEFAULT_DELIVERY, DELIVERY_OPTIONS
@@ -174,10 +176,24 @@ class OrderItemOut(BaseModel):
     qty: int
 
 
+class StatusEntryOut(BaseModel):
+    """Запись истории заказа для покупателя. notified и actor_id наружу не идут:
+    первое — внутренняя кухня уведомлений, второе — чужой tg id."""
+    status: str
+    status_text: str
+    actor: Literal["admin", "customer", "system"]
+    note: str
+    created_at: str
+
+
 class OrderOut(BaseModel):
     id: int
     status: str
     status_text: str
+    # Витрина не знает схему переходов — сервер говорит, что можно показать.
+    can_cancel: bool = False
+    is_final: bool = False
+    history: list[StatusEntryOut] = []
     items_total: int
     items_total_text: str
     discount: int
