@@ -33,5 +33,13 @@ services:
         value: shop
       - key: CURRENCY
         value: USD
+      # Консультант на Gemini: Render живёт в США, VPN ему не нужен. Ключ
+      # вводится в панели один раз, как и BOT_TOKEN.
+      - key: AI_PROVIDER
+        value: gemini
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-3.5-flash-lite
       # WEBAPP_URL не задаём: адрес придёт из RENDER_EXTERNAL_URL, который
       # платформа подставляет сама — дублировать домен руками незачем.

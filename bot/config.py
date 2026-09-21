@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Сертификат НУЦ Минцифры на машине не стоит — ставить, а не выключать
     # проверку. False только для локальной отладки.
     gigachat_verify_ssl: bool = True
-    # gemini — только для отладки агента на живой модели (VPN, карта не РФ).
+    # gemini — для хостинга вне РФ (Render) и отладки; из РФ нужен VPN.
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
 
