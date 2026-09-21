@@ -41,5 +41,14 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-3.5-flash-lite
+      # Жизненный цикл заказа: адрес выдачи уходит покупателю в сообщении,
+      # порог автоотмены — час под ручную сверку перевода (вебхук платёжки
+      # позволит 10-15). Вводятся в панели, у витрины своих значений нет.
+      - key: PICKUP_ADDRESS
+        sync: false
+      - key: PICKUP_HOURS
+        sync: false
+      - key: UNPAID_TTL_MINUTES
+        value: "60"
       # WEBAPP_URL не задаём: адрес придёт из RENDER_EXTERNAL_URL, который
       # платформа подставляет сама — дублировать домен руками незачем.
