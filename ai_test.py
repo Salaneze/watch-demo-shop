@@ -19,7 +19,9 @@ os.environ["ADMIN_IDS"] = "777, 778"
 os.environ["AI_PROVIDER"] = ""
 
 from bot.ai import tools  # noqa: E402
-from bot.ai.agent import FALLBACK_TEXT, MAX_TOOL_ROUNDS, Agent  # noqa: E402
+from bot.ai.agent import (  # noqa: E402
+    FALLBACK_TEXT, MAX_TOOL_ROUNDS, QUOTA_DAY_TEXT, QUOTA_MINUTE_TEXT, Agent, Quota,
+)
 from bot.ai.provider import FakeProvider, Reply, build_provider  # noqa: E402
 from bot.ai.tools import ToolContext  # noqa: E402
 from bot.db import repo  # noqa: E402
@@ -191,6 +193,26 @@ async def run() -> None:
         check("неизвестный провайдер отбит", False)
     except ValueError:
         check("неизвестный провайдер отбит", True)
+
+    print("\n[5] Квота на пользователя")
+    q = Quota(per_minute=2, per_day=3)
+    check("первые два проходят", q.take(1, now=0.0) is None and q.take(1, now=1.0) is None)
+    check("третий за минуту — отказ", q.take(1, now=2.0) == QUOTA_MINUTE_TEXT)
+    check("другой пользователь не задет", q.take(2, now=2.0) is None)
+    check("через минуту снова можно", q.take(1, now=61.0) is None)
+    check("суточный потолок", q.take(1, now=200.0) == QUOTA_DAY_TEXT)
+    check("через сутки окно чистое", q.take(1, now=24 * 3600 + 1.0) is None)
+    check("нули выключают лимит", all(Quota(0, 0).take(3, now=float(i)) is None for i in range(50)))
+
+    async with session_factory() as s:
+        llm = FakeProvider([Reply(text="ответ")] * 5)
+        agent = Agent(llm, quota=Quota(per_minute=1, per_day=10))
+        ctx = ToolContext(session=s, bot=FakeBot(), user_id=5009, user_name="К")
+        first = await agent.ask(ctx, "раз")
+        second = await agent.ask(ctx, "два")
+        check("первый вопрос ушёл в модель", first == "ответ" and len(llm.calls) == 1, f"{first!r} {len(llm.calls)}")
+        check("отказ по квоте — без вызова модели", second == QUOTA_MINUTE_TEXT and len(llm.calls) == 1, f"{second!r} {len(llm.calls)}")
+        check("отказ не попал в историю", all(m["content"] != "два" for m in agent._history[5009]))
 
     print(f"\nИтого: {ok} OK, {fail} FAIL")
     if DB_FILE.exists():

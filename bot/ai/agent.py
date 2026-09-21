@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from bot.ai import tools
 from bot.ai.provider import LLM, Message, Reply
@@ -19,6 +20,36 @@ log = logging.getLogger(__name__)
 MAX_TOOL_ROUNDS = 4
 
 FALLBACK_TEXT = "Что-то пошло не так с консультантом. Попробуйте ещё раз или напишите менеджеру."
+QUOTA_MINUTE_TEXT = "Слишком много вопросов подряд — продолжим через минуту."
+QUOTA_DAY_TEXT = "На сегодня лимит вопросов консультанту исчерпан. Напишите менеджеру — он поможет."
+
+DAY = 24 * 3600
+
+
+class Quota:
+    """Потолок обращений к модели на пользователя, минутный и суточный.
+
+    Живёт в памяти рядом с историей: перезапуск обнуляет, и для v1 это
+    приемлемо — цель не бухгалтерия, а чтобы один человек не выжег ключ.
+    Считается ДО вызова модели: отказ по квоте токенов не стоит.
+    """
+
+    def __init__(self, per_minute: int, per_day: int) -> None:
+        self.per_minute = per_minute
+        self.per_day = per_day
+        self._hits: dict[int, list[float]] = {}
+
+    def take(self, user_id: int, now: float | None = None) -> str | None:
+        """None — можно; иначе текст отказа для пользователя."""
+        now = time.monotonic() if now is None else now
+        hits = [t for t in self._hits.get(user_id, []) if now - t < DAY]
+        self._hits[user_id] = hits
+        if self.per_day and len(hits) >= self.per_day:
+            return QUOTA_DAY_TEXT
+        if self.per_minute and sum(1 for t in hits if now - t < 60) >= self.per_minute:
+            return QUOTA_MINUTE_TEXT
+        hits.append(now)
+        return None
 
 
 def system_prompt() -> str:
@@ -34,14 +65,19 @@ def system_prompt() -> str:
 
 
 class Agent:
-    def __init__(self, llm: LLM) -> None:
+    def __init__(self, llm: LLM, quota: Quota | None = None) -> None:
         self._llm = llm
         self._history: dict[int, list[Message]] = {}
+        self.quota = quota or Quota(settings.ai_max_per_minute, settings.ai_max_per_day)
 
     def reset(self, user_id: int) -> None:
         self._history.pop(user_id, None)
 
     async def ask(self, ctx: ToolContext, text: str) -> str:
+        refusal = self.quota.take(ctx.user_id)
+        if refusal:
+            log.info("Квота консультанта для %s: %s", ctx.user_id, refusal)
+            return refusal
         history = self._history.setdefault(ctx.user_id, [])
         history.append({"role": "user", "content": text})
         del history[:-HISTORY_LIMIT]
