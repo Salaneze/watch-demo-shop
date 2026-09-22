@@ -35,6 +35,7 @@ from bot.db.models import Order
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
 from bot.utils.notify import notify_admins_new_order, notify_admins_order_cancelled
+from bot.utils.keepalive import start_keepalive
 from bot.utils.sweeper import start_sweeper
 from bot.utils.seed import seed_if_empty
 
@@ -149,10 +150,11 @@ async def lifespan(app: FastAPI):
         log.info("Режим long-polling")
 
     sweeper = start_sweeper(bot)
+    keepalive = start_keepalive()
     try:
         yield
     finally:
-        for task in (polling, sweeper):
+        for task in (polling, sweeper, keepalive):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
