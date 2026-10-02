@@ -16,8 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.db import repo
 
-# Рисунки демо-товаров. Генерируются `tools/gen_watch_art.py` и лежат в
-# репозитории — на хостинге ничего не рисуется, Pillow там не нужен.
+# Рисунки демо-товаров лежат готовыми в репозитории — на хостинге ничего
+# не рисуется, Pillow там не нужен.
 ART_DIR = Path("media/seed")
 
 # --- основная витрина: мемы спрятаны в названиях моделей ---

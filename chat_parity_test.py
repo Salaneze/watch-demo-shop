@@ -23,6 +23,9 @@ os.environ["SEED"] = "plain"
 os.environ["CURRENCY"] = "USD"
 os.environ["DELIVERY_COURIER"] = "9"
 os.environ["DELIVERY_POST"] = "15"
+# Без своего админа тест брал ADMIN_IDS из локального .env и на чистом клоне
+# падал на проверках уведомления.
+os.environ["ADMIN_IDS"] = "424242"
 
 from aiogram.fsm.context import FSMContext  # noqa: E402
 from aiogram.fsm.storage.base import StorageKey  # noqa: E402
