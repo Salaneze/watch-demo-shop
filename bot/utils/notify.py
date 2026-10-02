@@ -21,6 +21,25 @@ from bot.utils.text import esc
 log = logging.getLogger(__name__)
 
 
+def check_admins(bot_id: int) -> None:
+    """Сказать вслух, если уведомлять админов некого или некому.
+
+    id бота в ADMIN_IDS — настоящая история этого проекта: Telegram на такую
+    отправку отвечает «the bot can't send messages to the bot», заказы
+    оформлялись, а уведомления умирали в предупреждении. Снаружи это выглядит
+    как рабочий магазин, и заметить можно только по логам.
+    """
+    if not settings.admins:
+        log.error("ADMIN_IDS пуст: уведомления о заказах никому не уйдут")
+        return
+    if bot_id in settings.admins:
+        log.error(
+            "В ADMIN_IDS стоит id самого бота (%s) — Telegram не даст боту "
+            "написать себе. Укажите личный Telegram id, его подскажет @userinfobot",
+            bot_id,
+        )
+
+
 def totals_lines(
     items_total: int,
     discount: int,

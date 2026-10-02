@@ -34,7 +34,11 @@ from bot.db.base import init_db, session_factory
 from bot.db.models import Order
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
-from bot.utils.notify import notify_admins_new_order, notify_admins_order_cancelled
+from bot.utils.notify import (
+    check_admins,
+    notify_admins_new_order,
+    notify_admins_order_cancelled,
+)
 from bot.utils.keepalive import start_keepalive
 from bot.utils.sweeper import start_sweeper
 from bot.utils.seed import seed_if_empty
@@ -100,6 +104,7 @@ async def lifespan(app: FastAPI):
     dp.include_router(setup_routers())
 
     me = await bot.get_me()
+    check_admins(me.id)
     log.info(
         "Витрина поднята: @%s, http://%s:%s, публичный адрес: %s",
         me.username, settings.web_host, settings.web_port,

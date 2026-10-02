@@ -12,6 +12,7 @@ from bot.db.base import init_db, session_factory
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
 from bot.utils.seed import seed_if_empty
+from bot.utils.notify import check_admins
 from bot.utils.sweeper import start_sweeper
 
 log = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ async def main() -> None:
     dp.include_router(setup_routers())
 
     me = await bot.get_me()
+    check_admins(me.id)
     log.info("Запускаю @%s (id=%s), админы: %s", me.username, me.id, settings.admins or "не заданы")
 
     await bot.delete_webhook(drop_pending_updates=True)

@@ -28,6 +28,38 @@ def check(label, cond, extra=""):
 print("\n[1] Конфиг")
 check("парсинг ADMIN_IDS", settings.admins == {111, 222}, settings.admins)
 
+import logging  # noqa: E402
+
+from bot.utils.notify import check_admins  # noqa: E402
+
+
+def errors_of(bot_id: int, admins: set[int]) -> list[str]:
+    """Что скажет проверка админов в лог при таком наборе."""
+    saved = settings.admin_ids
+    settings.admin_ids = ",".join(str(a) for a in admins)
+    logger = logging.getLogger("bot.utils.notify")
+    caught: list[str] = []
+
+    class Catch(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.ERROR:
+                caught.append(record.getMessage())
+
+    h = Catch()
+    logger.addHandler(h)
+    try:
+        check_admins(bot_id)
+    finally:
+        logger.removeHandler(h)
+        settings.admin_ids = saved
+    return caught
+
+
+print("\n[1.1] Проверка ADMIN_IDS при старте")
+check("id бота в админах — ошибка в лог", len(errors_of(777, {777})) == 1)
+check("пустой ADMIN_IDS — ошибка в лог", len(errors_of(777, set())) == 1)
+check("нормальный админ — молчит", errors_of(777, {111}) == [])
+
 print("\n[2] Сборка диспетчера")
 dp = Dispatcher(storage=MemoryStorage())
 dp.update.middleware(DbSessionMiddleware())
