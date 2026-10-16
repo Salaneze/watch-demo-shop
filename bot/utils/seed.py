@@ -26,7 +26,7 @@ SHOP = {
         (
             "Ohio Diver 67",
             "Automatic, NH35 movement. 40 mm steel case, 120-click bezel, sapphire crystal. "
-            "Water resistance 670 ft, 41-hour power reserve.",
+            "Water resistance 300 m, 41-hour power reserve.",
             670,
         ),
         (
