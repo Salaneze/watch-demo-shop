@@ -14,6 +14,7 @@ from bot.keyboards.callbacks import (
     CartCB,
     CategoryCB,
     CustomerOrderCB,
+    LoginCB,
     NavCB,
     ProductCB,
 )
@@ -40,6 +41,12 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     if is_admin:
         rows.append([KeyboardButton(text="⚙️ Админка")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def login_confirm_kb(code: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Да, это я вхожу", callback_data=LoginCB(code=code))
+    return kb.as_markup()
 
 
 def categories_kb(categories: list[Category]) -> InlineKeyboardMarkup:

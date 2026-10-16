@@ -32,3 +32,8 @@ class AdminOrderCB(CallbackData, prefix="aord"):
 class CustomerOrderCB(CallbackData, prefix="cord"):
     order_id: int
     action: str  # history | cancel
+
+
+class LoginCB(CallbackData, prefix="wal"):
+    # Код входа витрины: 22 символа token_urlsafe, вместе с префиксом ~26 байт.
+    code: str

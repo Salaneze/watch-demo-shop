@@ -55,6 +55,12 @@ class LoginStore:
         self._codes[code] = _Pending(created=time.time())
         return code
 
+    def is_pending(self, code: str) -> bool:
+        """Код жив и ещё никем не подтверждён — ему есть смысл спрашивать подтверждение."""
+        self._sweep()
+        pending = self._codes.get(code)
+        return pending is not None and pending.user_id is None
+
     def confirm(self, code: str, user_id: int, username: str | None,
                 full_name: str | None) -> bool:
         """Вызывается ботом, когда пришёл /start с этим кодом."""

@@ -132,8 +132,31 @@ async def main() -> None:
         check("пока человек не подтвердил — не готово",
               r.status_code == 200 and r.json()["ready"] is False, r.text[:120])
 
-        # Это делает бот, получив /start wa_<код> от Telegram.
-        login_store.confirm(code, 800000777, "moduser", "Mod User")
+        # Фишинг ссылкой: жертва жмёт «Старт» по чужой ссылке. Одно это не должно
+        # выдать сессию — только кнопка под предупреждением.
+        from unittest.mock import AsyncMock, MagicMock
+        from aiogram.filters import CommandObject
+        from bot.handlers.common import cb_login_confirm, cmd_start_login
+        from bot.keyboards.callbacks import LoginCB
+
+        victim = MagicMock(id=800000777, username="moduser", full_name="Mod User")
+        msg = MagicMock(from_user=victim, answer=AsyncMock())
+        async with session_factory() as s:
+            await cmd_start_login(msg, CommandObject(command="start", args=f"wa_{code}"),
+                                  s, AsyncMock())
+        r = await c.get(f"/api/auth/poll?code={code}")
+        check("один /start по ссылке вход не подтверждает",
+              r.status_code == 200 and r.json()["ready"] is False, r.text[:120])
+        markup = msg.answer.call_args.kwargs["reply_markup"]
+        button = markup.inline_keyboard[0][0]
+        check("бот спрашивает подтверждение кнопкой",
+              LoginCB.unpack(button.callback_data).code == code
+              and len(button.callback_data.encode()) <= 64, button.callback_data)
+
+        # Человек нажал кнопку — вот теперь вход подтверждён.
+        cq = MagicMock(from_user=victim, answer=AsyncMock(),
+                       message=MagicMock(answer=AsyncMock(), edit_reply_markup=AsyncMock()))
+        await cb_login_confirm(cq, LoginCB(code=code))
         r = await c.get(f"/api/auth/poll?code={code}")
         body = r.json()
         check("после подтверждения выдан токен", body["ready"] and body["token"], r.text[:120])

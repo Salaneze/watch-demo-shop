@@ -9,8 +9,8 @@ from api.session import store as login_store
 from bot.config import settings
 from bot.db import repo
 from bot.db.models import status_ru
-from bot.keyboards.callbacks import CustomerOrderCB
-from bot.keyboards.common import customer_order_kb, main_menu
+from bot.keyboards.callbacks import CustomerOrderCB, LoginCB
+from bot.keyboards.common import customer_order_kb, login_confirm_kb, main_menu
 from bot.utils.lifecycle import CUSTOMER_CANCEL_NOTE, InvalidTransition, apply_transition
 from bot.utils.money import fmt
 from bot.utils.notify import history_lines, notify_admins_order_cancelled
@@ -22,11 +22,15 @@ router = Router(name="common")
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_login(message: Message, command: CommandObject, session: AsyncSession,
                           state: FSMContext) -> None:
-    """`/start wa_<код>` — подтверждение входа в витрину.
+    """`/start wa_<код>` — запрос на вход в витрину.
 
     Сюда приходят только клиенты, у которых Mini App не отдаёт подпись Telegram.
-    Апдейт пришёл через серверы Telegram, значит отправитель — настоящий владелец
-    аккаунта, и доказывать личность как-то ещё не нужно.
+    Кто нажал «Старт», мы знаем точно — апдейт пришёл через серверы Telegram.
+    Но не знаем, кто создал ссылку: код выдаётся любому, и раньше вход
+    подтверждался молча. Злоумышленник брал код себе, присылал ссылку жертве
+    («жми, тут скидка»), та жала «Старт» — и его витрина получала её сессию
+    на сутки: заказы с телефоном и адресом, отмену, покупки от её имени.
+    Поэтому только вопрос с кнопкой и прямым предупреждением.
     """
     code = code_from_start(command.args or "")
     if code is None:
@@ -37,15 +41,34 @@ async def cmd_start_login(message: Message, command: CommandObject, session: Asy
     await repo.upsert_user(
         session, message.from_user.id, message.from_user.username, message.from_user.full_name
     )
-    confirmed = login_store.confirm(
-        code, message.from_user.id, message.from_user.username, message.from_user.full_name
-    )
+    if not login_store.is_pending(code):
+        await message.answer(
+            "⌛ Код входа устарел. Открой витрину заново и нажми «Войти» ещё раз.",
+            reply_markup=main_menu(message.from_user.id in settings.admins),
+        )
+        return
     await message.answer(
+        "🔐 <b>Вход в витрину</b>\n\n"
+        "Подтверждай, только если ты сам сейчас нажал «Войти» в витрине магазина.\n"
+        "Если ссылку тебе кто-то прислал — не нажимай: он получит доступ "
+        "к твоей корзине и заказам.",
+        reply_markup=login_confirm_kb(code),
+    )
+
+
+@router.callback_query(LoginCB.filter())
+async def cb_login_confirm(cq: CallbackQuery, callback_data: LoginCB) -> None:
+    confirmed = login_store.confirm(
+        callback_data.code, cq.from_user.id, cq.from_user.username, cq.from_user.full_name
+    )
+    await cq.message.edit_reply_markup(reply_markup=None)
+    await cq.message.answer(
         "✅ Витрина авторизована — вернись в неё, каталог уже открыт."
         if confirmed else
         "⌛ Код входа устарел. Открой витрину заново и нажми «Войти» ещё раз.",
-        reply_markup=main_menu(message.from_user.id in settings.admins),
+        reply_markup=main_menu(cq.from_user.id in settings.admins),
     )
+    await cq.answer()
 
 
 @router.message(CommandStart())
