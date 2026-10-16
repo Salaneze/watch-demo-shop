@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from typing import Annotated, AsyncIterator
@@ -305,6 +306,18 @@ async def cart_clear(user: CurrentUser, session: Session) -> CartOut:
     return await _cart_out(session, user.id, [])
 
 
+def iso_utc(dt: datetime) -> str:
+    """Время для браузера — всегда с поясом.
+
+    SQLite отдаёт DateTime(timezone=True) обратно наивным, хотя пишем мы UTC
+    (models.utcnow). Строку без пояса JS читает как местное время, и
+    история заказа у покупателя из Москвы съезжала на три часа назад.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
 def _order_out(order, history=None) -> OrderOut:
     # Заказы, оформленные до появления доставки, лежат в базе без разбивки:
     # items_total у них 0, поэтому за сумму товаров берём общий итог.
@@ -325,7 +338,7 @@ def _order_out(order, history=None) -> OrderOut:
         history=[
             StatusEntryOut(
                 status=h.status, status_text=status_ru(h.status), actor=h.actor,
-                note=h.note, created_at=h.created_at.isoformat(),
+                note=h.note, created_at=iso_utc(h.created_at),
             )
             for h in (history or [])
         ],
@@ -339,7 +352,7 @@ def _order_out(order, history=None) -> OrderOut:
         delivery_cost_text=fmt(order.delivery_cost),
         total=order.total,
         total_text=fmt(order.total),
-        created_at=order.created_at.isoformat(),
+        created_at=iso_utc(order.created_at),
         items=[
             OrderItemOut(title=i.title, price=i.price, qty=i.qty) for i in order.items
         ],

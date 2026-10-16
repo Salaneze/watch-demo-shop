@@ -72,12 +72,8 @@ async def products_in_category(
         # Ищем и по названию, и по описанию: «нато» человек напишет, помня
         # ремешок, а не его артикул. like_escape — чтобы % в запросе искал
         # процент, а не «что угодно».
-        pattern = f"%{_like_escape(query)}%"
         stmt = stmt.where(
-            or_(
-                Product.title.ilike(pattern, escape="\\"),
-                Product.description.ilike(pattern, escape="\\"),
-            )
+            or_(_contains_ci(Product.title, query), _contains_ci(Product.description, query))
         )
 
     return list(await s.scalars(stmt.order_by(*SORT_ORDERS.get(sort, SORT_ORDERS[DEFAULT_SORT]))))
@@ -85,6 +81,16 @@ async def products_in_category(
 
 def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _contains_ci(column, query: str):
+    """Подстрока без учёта регистра, и для кириллицы тоже.
+
+    ilike() тут не годится: в SQLite он снимает регистр только у латиницы.
+    lower() с обеих сторон работает везде — в SQLite он подменён на
+    юникодный в bot.db.base.
+    """
+    return func.lower(column).like(f"%{_like_escape(query.lower())}%", escape="\\")
 
 
 async def product(s: AsyncSession, product_id: int) -> Product | None:
@@ -335,6 +341,38 @@ async def orders_by_status(s: AsyncSession, status: OrderStatus | None = None, l
         q = q.where(Order.status == status)
     res = await s.scalars(q)
     return list(res)
+
+
+async def search_orders(s: AsyncSession, status: str | None = None, query: str = "",
+                        limit: int = 100) -> list[Order]:
+    """Список для веб-панели: фильтр по статусу и поиск по номеру, имени, телефону.
+
+    Номер ищем точным совпадением, а не LIKE: «12» не должно находить #112
+    и #1200 — админ, набравший номер, хочет ровно этот заказ.
+    """
+    q = select(Order).options(selectinload(Order.items)).order_by(Order.id.desc()).limit(limit)
+    if status:
+        q = q.where(Order.status == status)
+    query = query.strip()
+    if query:
+        conds = [_contains_ci(Order.contact_name, query)]
+        digits = "".join(ch for ch in query if ch.isdigit())
+        if query.lstrip("#").isdigit():
+            conds.append(Order.id == int(query.lstrip("#")))
+        if len(digits) >= 4:
+            # Телефон лежит как его набрал покупатель: «+7 (916) 555-12-34».
+            # Срезаем разделители в самом SQL — replace() есть и в SQLite, и в Postgres.
+            bare = Order.contact_phone
+            for ch in (" ", "-", "(", ")", "+"):
+                bare = func.replace(bare, ch, "")
+            conds.append(bare.like(f"%{digits}%"))
+        q = q.where(or_(*conds))
+    return list(await s.scalars(q))
+
+
+async def order_status_counts(s: AsyncSession) -> dict[str, int]:
+    rows = await s.execute(select(Order.status, func.count()).group_by(Order.status))
+    return {str(st): n for st, n in rows.all()}
 
 
 async def set_order_status(s: AsyncSession, order_id: int, expected: str, new: str) -> bool:

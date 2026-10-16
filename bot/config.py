@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # Валюта витрины: USD | EUR | GBP | RUB | KZT
     currency: str = "USD"
     shop_name: str = "Watch Demo"
+    # Часовой пояс магазина: в нём бот печатает время заказов. В базе всё в UTC.
+    shop_tz: str = "Europe/Moscow"
 
     # --- ИИ-консультант ---
     # Пусто — консультанта нет, кнопка не показывается, SDK не импортируется.

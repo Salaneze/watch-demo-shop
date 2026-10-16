@@ -27,6 +27,7 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.admin import router as admin_router
 from api.lead import router as lead_router
 from api.limits import LimitsMiddleware
 from api.routes import router
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
     app.add_middleware(LimitsMiddleware)
     app.include_router(router)
     app.include_router(lead_router)
+    app.include_router(admin_router)
 
     # Приём апдейтов Telegram. Путь секретный и выведен из токена, плюс Telegram
     # присылает согласованный заголовок — проверяем оба: путь может осесть в
@@ -203,6 +205,12 @@ def create_app() -> FastAPI:
         @app.get("/", include_in_schema=False)
         async def index() -> HTMLResponse:
             return HTMLResponse(index_html())
+
+        @app.get("/admin", include_in_schema=False)
+        async def admin_panel() -> FileResponse:
+            # Скрипт панели встроен в страницу, поэтому кэш браузера держал бы
+            # старую логику после деплоя — no-store дешевле версионирования.
+            return FileResponse(WEBAPP_DIR / "admin.html", headers={"Cache-Control": "no-store"})
 
         app.mount("/", StaticFiles(directory=WEBAPP_DIR), name="webapp")
 

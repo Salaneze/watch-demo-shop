@@ -1,10 +1,20 @@
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from bot.config import settings
 
 engine = create_async_engine(settings.db_url, echo=False)
+
+if engine.dialect.name == "sqlite":
+    @event.listens_for(engine.sync_engine, "connect")
+    def _unicode_lower(dbapi_conn, _record) -> None:
+        # Встроенный lower() в SQLite знает только латиницу, поэтому поиск
+        # «ремешок» не находил «Ремешок», а «анна» — «Анну». Подменяем на
+        # питоновский; в Postgres lower() юникодный и так.
+        dbapi_conn.create_function("lower", 1, lambda s: s.lower() if isinstance(s, str) else s,
+                                   deterministic=True)
+
 session_factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

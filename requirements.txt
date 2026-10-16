@@ -7,3 +7,5 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 # ИИ-консультант (опционально: без AI_PROVIDER не импортируется)
 gigachat==0.2.3
+# Часовые пояса для SHOP_TZ: на Windows и в slim-образах своей базы зон нет
+tzdata==2026.5

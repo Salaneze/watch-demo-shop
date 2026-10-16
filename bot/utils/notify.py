@@ -16,7 +16,7 @@ from bot.db.models import Order, OrderStatusHistory, status_ru
 from bot.keyboards.common import admin_order_kb
 from bot.utils.delivery import delivery_option
 from bot.utils.money import fmt
-from bot.utils.text import esc
+from bot.utils.text import esc, local_time
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ def history_lines(entries: list[OrderStatusHistory]) -> list[str]:
     """История статусов для карточки — одна строка на запись, note только если есть."""
     lines = []
     for h in entries:
-        when = h.created_at.strftime("%d.%m %H:%M")
+        when = local_time(h.created_at)
         line = f"<code>{when}</code> {status_ru(h.status)}"
         if h.note:
             line += f" — {esc(h.note)}"

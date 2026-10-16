@@ -30,6 +30,7 @@ import httpx  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 
 from api.routes import router as api_router  # noqa: E402
+from bot.db import repo  # noqa: E402
 from bot.db.base import init_db, session_factory  # noqa: E402
 from bot.utils.delivery import resolve_promo  # noqa: E402
 from bot.utils.seed import seed_if_empty  # noqa: E402
@@ -70,6 +71,8 @@ async def run() -> None:
     await init_db()
     async with session_factory() as s:
         await seed_if_empty(s)
+        cat = (await repo.active_categories(s))[0]
+        await repo.add_product(s, cat.id, "Ремешок Кожаный", "тёмно-коричневый", 30, None)
 
     app = FastAPI()
     app.include_router(api_router)
@@ -90,6 +93,13 @@ async def run() -> None:
         found = [p["title"] for cat in r.json()["categories"] for p in cat["products"]]
         # Если % уедет в LIKE как есть, он совпадёт со всем каталогом.
         check("процент ищется как символ, а не как маска", found == [], str(found))
+
+        # SQLite снимает регистр в LIKE только у латиницы — «ремешок» не
+        # находил «Ремешок», пока lower() не подменили на юникодный.
+        for q in ("ремешок", "КОЖАНЫЙ", "Тёмно"):
+            r = await c.get("/api/catalog", params={"q": q})
+            found = [p["title"] for cat in r.json()["categories"] for p in cat["products"]]
+            check(f"кириллица без учёта регистра: {q}", found == ["Ремешок Кожаный"], str(found))
 
         r = await c.get("/api/catalog", params={"sort": "price_asc"})
         prices = [p["price"] for cat in r.json()["categories"] for p in cat["products"]]

@@ -12,17 +12,17 @@ from bot.db.models import Order, OrderStatus, status_ru
 from bot.keyboards.callbacks import AdminOrderCB
 from bot.keyboards.common import admin_order_kb
 from bot.states import AddProduct, AdminOrderInput
+from bot.utils.admin_ops import admin_transition
 from bot.utils.lifecycle import (
     CANCEL_REASON_MAX,
     InvalidTransition,
-    apply_transition,
     is_final,
     note_required,
     validate_note,
 )
 from bot.utils.money import fmt, symbol
-from bot.utils.notify import history_lines, notify_customer_status, order_text
-from bot.utils.text import esc
+from bot.utils.notify import history_lines, order_text
+from bot.utils.text import esc, local_time
 
 router = Router(name="admin")
 log = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ async def show_audit(message: Message, session: AsyncSession) -> None:
 
     lines = ["📋 <b>Последние действия</b>\n"]
     for e in entries:
-        when = e.created_at.strftime("%d.%m %H:%M")
+        when = local_time(e.created_at)
         who = "ты" if e.admin_id == message.from_user.id else f"id{e.admin_id}"
         detail = f" — {esc(e.details)}" if e.details else ""
         lines.append(f"<code>{when}</code> {who}: {esc(e.action)} {esc(e.target)}{detail}")
@@ -104,14 +104,11 @@ async def _finish_transition(
     Возвращает текст для админа, заказ и историю. InvalidTransition наружу —
     вызывающий решает, alert это или обычный ответ.
     """
-    order, entry = await apply_transition(
-        session, order_id, from_status, to_status, actor="admin", actor_id=admin_id, note=note,
-    )
-    await repo.log_action(
-        session, admin_id, "order_status", f"order#{order.id}", f"{from_status} -> {to_status}",
+    order, _, notified = await admin_transition(
+        session, bot, admin_id, order_id, from_status, to_status, note,
     )
     reply = f"Статус: {status_ru(to_status)}"
-    if not await notify_customer_status(bot, session, order, entry):
+    if not notified:
         reply += "\n⚠ покупатель не уведомлён"
     return reply, order, await repo.history_for(session, order.id)
 
