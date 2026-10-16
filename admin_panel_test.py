@@ -189,6 +189,22 @@ async def main() -> None:
                          json={"from_status": st0, "to_status": "paid"})
         check("без бота переход проходит, notified=false", r.status_code == 200 and r.json()["notified"] is False, r.text)
 
+    print("\n[8] Кнопка панели в боте")
+    from bot.config import settings
+    from bot.keyboards.common import admin_panel_kb
+    saved = settings.webapp_url
+    try:
+        settings.webapp_url = "https://shop.example/"
+        btn = admin_panel_kb().inline_keyboard[0][0]
+        # Именно web_app, а не url: обычная ссылка откроет браузер без initData,
+        # и админ снова пойдёт через «Войти» и подтверждение.
+        check("кнопка открывает /admin как Mini App",
+              btn.web_app is not None and btn.web_app.url == "https://shop.example/admin", btn)
+        settings.webapp_url = "http://localhost:8080"
+        check("без https кнопки нет (Telegram не откроет)", admin_panel_kb() is None)
+    finally:
+        settings.webapp_url = saved
+
     print(f"\n{'=' * 40}\nOK: {ok}   FAIL: {fail}")
     sys.exit(1 if fail else 0)
 

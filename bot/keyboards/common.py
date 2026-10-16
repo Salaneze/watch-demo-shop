@@ -43,6 +43,18 @@ def main_menu(is_admin: bool = False) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+def admin_panel_kb() -> InlineKeyboardMarkup | None:
+    # Инлайн, а не в постоянную клавиатуру: та висит у клиента до следующего
+    # /start, и кнопка панели прилипла бы к админу, которого уже сняли.
+    # Внутри Telegram панель входит по initData, без «Войти» и подтверждения.
+    if not settings.has_webapp:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="📋 Открыть панель заказов",
+        web_app=WebAppInfo(url=f"{settings.public_url}/admin"),
+    )]])
+
+
 def login_confirm_kb(code: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✅ Да, это я вхожу", callback_data=LoginCB(code=code))

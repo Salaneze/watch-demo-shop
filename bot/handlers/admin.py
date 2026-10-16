@@ -10,7 +10,7 @@ from bot.config import settings
 from bot.db import repo
 from bot.db.models import Order, OrderStatus, status_ru
 from bot.keyboards.callbacks import AdminOrderCB
-from bot.keyboards.common import admin_order_kb
+from bot.keyboards.common import admin_order_kb, admin_panel_kb
 from bot.states import AddProduct, AdminOrderInput
 from bot.utils.admin_ops import admin_transition
 from bot.utils.lifecycle import (
@@ -42,7 +42,8 @@ async def admin_menu(message: Message) -> None:
         "/addcat Название — новая категория\n"
         "/addproduct — добавить товар (пошагово)\n"
         "/hide ID — скрыть/показать товар\n"
-        "/audit — журнал действий администраторов"
+        "/audit — журнал действий администраторов",
+        reply_markup=admin_panel_kb(),
     )
 
 

@@ -230,7 +230,8 @@ Vue.createApp({
     total() { return Object.values(this.counts).reduce((a, b) => a + b, 0); },
   },
   async mounted() {
-    if (TG) TG.ready();
+    // Таблица заказов в половине экрана нечитаема — раскрываем сразу.
+    if (TG) { TG.ready(); TG.expand(); }
     await this.enter();
     // Новые заказы подтягиваем сами — админ не должен жать F5.
     setInterval(() => this.state === "ready" && !this.busy && this.load(), 15000);
