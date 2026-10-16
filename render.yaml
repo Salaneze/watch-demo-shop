@@ -54,5 +54,8 @@ services:
         sync: false
       - key: UNPAID_TTL_MINUTES
         value: "60"
+      # Откуда принимать заявки в /api/lead: демо-лендинг Pitline на GitHub Pages.
+      - key: LEAD_ORIGINS
+        value: https://salaneze.github.io
       # WEBAPP_URL не задаём: адрес придёт из RENDER_EXTERNAL_URL, который
       # платформа подставляет сама — дублировать домен руками незачем.

@@ -82,6 +82,11 @@ class Settings(BaseSettings):
     # угодно и обойдёт ограничитель частоты, меняя значение на каждый запрос.
     trust_proxy: bool = False
 
+    # --- Заявки с лендингов ---
+    # Домены страниц, которым разрешено слать форму в /api/lead, через запятую,
+    # со схемой и без слеша: https://salaneze.github.io. Пусто — эндпоинт выключен.
+    lead_origins: str = ""
+
     @property
     def public_url(self) -> str:
         """Внешний адрес витрины без хвостового слеша."""
@@ -114,6 +119,10 @@ class Settings(BaseSettings):
         return hmac.new(
             self.bot_token.encode(), b"webhook-secret", hashlib.sha256
         ).hexdigest()
+
+    @property
+    def lead_origin_list(self) -> set[str]:
+        return {x.strip().rstrip("/") for x in self.lead_origins.split(",") if x.strip()}
 
     @property
     def admins(self) -> set[int]:

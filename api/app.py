@@ -27,6 +27,7 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.lead import router as lead_router
 from api.limits import LimitsMiddleware
 from api.routes import router
 from bot.config import settings
@@ -171,6 +172,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Watch Demo Mini App", lifespan=lifespan, docs_url=None, redoc_url=None)
     app.add_middleware(LimitsMiddleware)
     app.include_router(router)
+    app.include_router(lead_router)
 
     # Приём апдейтов Telegram. Путь секретный и выведен из токена, плюс Telegram
     # присылает согласованный заголовок — проверяем оба: путь может осесть в
