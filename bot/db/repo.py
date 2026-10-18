@@ -358,7 +358,9 @@ async def search_orders(s: AsyncSession, status: str | None = None, query: str =
     if query:
         conds = [_contains_ci(Order.contact_name, query)]
         digits = "".join(ch for ch in query if ch.isdigit())
-        if query.lstrip("#").isdigit():
+        # Телефон целиком — тоже «одни цифры», но в int4 Postgres он не влезает,
+        # и сравнение с id роняет запрос. Такой номер заказа не бывает, пропускаем.
+        if query.lstrip("#").isdigit() and int(query.lstrip("#")) < 2**31:
             conds.append(Order.id == int(query.lstrip("#")))
         if len(digits) >= 4:
             # Телефон лежит как его набрал покупатель: «+7 (916) 555-12-34».

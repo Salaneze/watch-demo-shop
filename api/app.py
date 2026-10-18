@@ -26,13 +26,14 @@ from aiogram.types import Update
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import DBAPIError
 
 from api.admin import router as admin_router
 from api.lead import router as lead_router
 from api.limits import LimitsMiddleware
 from api.routes import router
 from bot.config import settings
-from bot.db.base import init_db, session_factory
+from bot.db.base import init_db, is_bad_value, session_factory
 from bot.db.models import Order
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
@@ -175,6 +176,15 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(lead_router)
     app.include_router(admin_router)
+
+    # Число, которое не влезает в колонку (id 99999999999 в адресе), SQLite
+    # молча сравнивал, а Postgres роняет запрос. Это кривой ввод, не сбой сервера.
+    @app.exception_handler(DBAPIError)
+    async def bad_value(request: Request, exc: DBAPIError) -> JSONResponse:
+        if not is_bad_value(exc):
+            raise exc
+        log.info("Отбит ввод, не влезший в тип колонки: %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": "Некорректное значение"}, status_code=400)
 
     # Приём апдейтов Telegram. Путь секретный и выведен из токена, плюс Telegram
     # присылает согласованный заголовок — проверяем оба: путь может осесть в
