@@ -13,16 +13,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.db import repo
 from bot.db.models import Order, OrderStatusHistory
 from bot.utils.lifecycle import apply_transition
-from bot.utils.notify import notify_customer_status
+from bot.utils.notify import notify_customer_status, sync_admin_keyboards
 
 
 async def admin_transition(
     session: AsyncSession, bot: Bot | None, admin_id: int,
     order_id: int, from_status: str, to_status: str, note: str = "",
-    source: str = "",
+    source: str = "", skip: tuple[int, int] | None = None,
 ) -> tuple[Order, OrderStatusHistory, bool]:
     """→ (заказ, запись истории, дошло ли уведомление покупателю).
 
+    skip — (chat_id, message_id) сообщения, на котором нажали кнопку: его
+    кнопки хендлер обновит сам.
     InvalidTransition и ValueError (кривой трек/причина) летят наружу —
     текст ошибки вызывающий показывает админу как есть.
     """
@@ -34,6 +36,7 @@ async def admin_transition(
     notified = False
     if bot is not None:
         notified = await notify_customer_status(bot, session, order, entry)
+        await sync_admin_keyboards(bot, session, order, skip=skip)
     else:
         await repo.mark_not_notified(session, entry.id)
     return order, entry, notified

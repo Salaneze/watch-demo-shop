@@ -272,8 +272,9 @@ async def run() -> None:
               broken)
 
         print("\n[7] Регресс: чек об оплате доходит до админа")
-        check("admin_order_kb импортирован в checkout",
-              getattr(checkout, "admin_order_kb", None) is not None)
+        # Был NameError: чек пересылался, а кнопки к нему падали на неимпортированном имени.
+        check("send_admin_order импортирован в checkout",
+              getattr(checkout, "send_admin_order", None) is not None)
 
         print("\n[8] Заказы: чат и витрина показывают один статус и одну историю")
         # Заказ из [1] переводим админом, потом смотрим глазами покупателя в обоих входах.

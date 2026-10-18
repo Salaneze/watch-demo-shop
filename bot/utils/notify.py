@@ -15,6 +15,7 @@ from bot.db import repo
 from bot.db.models import Order, OrderStatusHistory, status_ru
 from bot.keyboards.common import admin_order_kb
 from bot.utils.delivery import delivery_option
+from bot.utils.lifecycle import is_final
 from bot.utils.money import fmt
 from bot.utils.text import esc, local_time
 
@@ -102,24 +103,65 @@ def order_text(order: Order, for_admin: bool = False) -> str:
     return "\n".join(lines)
 
 
-async def notify_admins_new_order(bot: Bot, order: Order, source: str = "") -> None:
+async def send_admin_order(
+    bot: Bot, session: AsyncSession | None, chat_id: int, text: str, order: Order,
+) -> None:
+    """Сообщение админу с кнопками заказа. Запоминаем его, чтобы потом обновить
+    кнопки, когда статус сменят из другого места (см. sync_admin_keyboards)."""
+    msg = await bot.send_message(chat_id, text, reply_markup=admin_order_kb(order))
+    # Закрытый заказ больше не сменит статус — запись осталась бы в таблице навсегда.
+    if session is not None and not is_final(order.status):
+        await repo.remember_admin_message(session, order.id, chat_id, msg.message_id)
+
+
+async def sync_admin_keyboards(
+    bot: Bot, session: AsyncSession, order: Order, skip: tuple[int, int] | None = None,
+) -> None:
+    """Привести кнопки во всех сообщениях админов к текущему статусу заказа.
+
+    skip — сообщение, на котором нажали кнопку: его хендлер правит сам, а второй
+    edit того же содержимого Telegram отбивает ошибкой «message is not modified».
+    Сбой правки не важнее перехода: сообщение могли удалить, ему могло быть
+    больше 48 часов — тогда кнопка просто отобьётся при нажатии, как и раньше.
+    """
+    final = is_final(order.status)
+    markup = None if final else admin_order_kb(order)
+    for m in await repo.admin_messages(session, order.id):
+        if skip == (m.chat_id, m.message_id):
+            continue
+        try:
+            await bot.edit_message_reply_markup(
+                chat_id=m.chat_id, message_id=m.message_id, reply_markup=markup,
+            )
+        except Exception as e:
+            log.info("Кнопки заказа #%s в %s/%s не обновлены: %s", order.id, m.chat_id, m.message_id, e)
+    if final:
+        # Дальше статус не сменится, править эти сообщения больше незачем.
+        await repo.forget_admin_messages(session, order.id)
+
+
+async def notify_admins_new_order(
+    bot: Bot, order: Order, source: str = "", session: AsyncSession | None = None,
+) -> None:
     """Шлёт заказ всем админам. Падение доставки одному не должно ронять заказ."""
     head = "🔔 <b>Новый заказ</b>"
     if source:
         head += f" ({esc(source)})"
     for admin_id in settings.admins:
         try:
-            await bot.send_message(
-                admin_id,
-                head + "\n\n" + order_text(order, for_admin=True),
-                reply_markup=admin_order_kb(order),
+            await send_admin_order(
+                bot, session, admin_id, head + "\n\n" + order_text(order, for_admin=True), order,
             )
         except Exception as e:  # админ мог не нажать /start у бота
             log.warning("Не смог уведомить админа %s: %s", admin_id, e)
 
 
-async def notify_admins_order_cancelled(bot: Bot, order: Order, source: str = "") -> None:
+async def notify_admins_order_cancelled(
+    bot: Bot, order: Order, source: str = "", session: AsyncSession | None = None,
+) -> None:
     """Покупатель отменил заказ сам — админам знать, чтобы не собирать его."""
+    if session is not None:
+        await sync_admin_keyboards(bot, session, order)
     head = f"↩️ <b>Заказ #{order.id} отменён покупателем</b>"
     if source:
         head += f" ({esc(source)})"

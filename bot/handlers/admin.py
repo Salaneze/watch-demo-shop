@@ -21,7 +21,7 @@ from bot.utils.lifecycle import (
     validate_note,
 )
 from bot.utils.money import fmt, symbol
-from bot.utils.notify import history_lines, order_text
+from bot.utils.notify import history_lines, order_text, send_admin_order
 from bot.utils.text import esc, local_time
 
 router = Router(name="admin")
@@ -64,32 +64,32 @@ async def show_audit(message: Message, session: AsyncSession) -> None:
     await message.answer("\n".join(lines))
 
 
+async def _send_order_rows(message: Message, bot: Bot, session: AsyncSession, orders: list[Order]) -> None:
+    for o in orders:
+        await send_admin_order(
+            bot, session, message.chat.id,
+            f"<b>#{o.id}</b> — {fmt(o.total)} — {status_ru(o.status)}\n"
+            f"👤 {esc(o.contact_name)}, 📞 {esc(o.contact_phone)}",
+            o,
+        )
+
+
 @router.message(Command("orders"))
-async def list_orders(message: Message, session: AsyncSession) -> None:
+async def list_orders(message: Message, bot: Bot, session: AsyncSession) -> None:
     orders = await repo.orders_by_status(session, limit=15)
     if not orders:
         await message.answer("Заказов нет.")
         return
-    for o in orders:
-        await message.answer(
-            f"<b>#{o.id}</b> — {fmt(o.total)} — {status_ru(o.status)}\n"
-            f"👤 {esc(o.contact_name)}, 📞 {esc(o.contact_phone)}",
-            reply_markup=admin_order_kb(o),
-        )
+    await _send_order_rows(message, bot, session, orders)
 
 
 @router.message(Command("neworders"))
-async def list_new_orders(message: Message, session: AsyncSession) -> None:
+async def list_new_orders(message: Message, bot: Bot, session: AsyncSession) -> None:
     orders = await repo.orders_by_status(session, OrderStatus.awaiting_payment, limit=15)
     if not orders:
         await message.answer("Нет заказов, ждущих оплаты.")
         return
-    for o in orders:
-        await message.answer(
-            f"<b>#{o.id}</b> — {fmt(o.total)} — {status_ru(o.status)}\n"
-            f"👤 {esc(o.contact_name)}, 📞 {esc(o.contact_phone)}",
-            reply_markup=admin_order_kb(o),
-        )
+    await _send_order_rows(message, bot, session, orders)
 
 
 def _order_card(order, history) -> str:
@@ -99,6 +99,7 @@ def _order_card(order, history) -> str:
 async def _finish_transition(
     session: AsyncSession, bot: Bot, admin_id: int,
     order_id: int, from_status: str, to_status: str, note: str = "",
+    skip: tuple[int, int] | None = None,
 ) -> tuple[str, Order, list]:
     """Общий хвост кнопки и текстового ввода: переход, журнал, уведомление.
 
@@ -106,7 +107,7 @@ async def _finish_transition(
     вызывающий решает, alert это или обычный ответ.
     """
     order, _, notified = await admin_transition(
-        session, bot, admin_id, order_id, from_status, to_status, note,
+        session, bot, admin_id, order_id, from_status, to_status, note, skip=skip,
     )
     reply = f"Статус: {status_ru(to_status)}"
     if not notified:
@@ -144,6 +145,7 @@ async def order_action(
     try:
         reply, order, history = await _finish_transition(
             session, bot, call.from_user.id, order.id, from_status, to_status,
+            skip=(call.message.chat.id, call.message.message_id),
         )
     except InvalidTransition as e:
         await call.answer(f"Заказ уже в статусе {status_ru(e.current)}", show_alert=True)
@@ -183,10 +185,10 @@ async def order_input(message: Message, session: AsyncSession, bot: Bot, state: 
     except InvalidTransition as e:
         await message.answer(f"Заказ уже в статусе {status_ru(e.current)}, ничего не менял")
         return
-    await message.answer(
-        reply + "\n\n" + _order_card(order, history),
-        reply_markup=admin_order_kb(order) if not is_final(order.status) else None,
-    )
+    if is_final(order.status):
+        await message.answer(reply + "\n\n" + _order_card(order, history))
+    else:
+        await send_admin_order(bot, session, message.chat.id, reply + "\n\n" + _order_card(order, history), order)
 
 
 @router.message(Command("addcat"))

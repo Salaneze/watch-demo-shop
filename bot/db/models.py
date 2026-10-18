@@ -216,3 +216,21 @@ class AuditLog(Base):
     target: Mapped[str] = mapped_column(String(64))       # что именно затронуто
     details: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AdminOrderMessage(Base):
+    """Сообщение в чате админа, под которым висят кнопки заказа.
+
+    Без этого списка бот знает только сообщение, на котором нажали кнопку. Статус
+    сменили в веб-панели, у второго админа или автоотменой — а в чате остаются
+    «Оплачен / Отменить» у давно отменённого заказа. Нажатие бот отобьёт, но
+    выглядит это как сломанный магазин.
+    """
+
+    __tablename__ = "admin_order_messages"
+    __table_args__ = (UniqueConstraint("chat_id", "message_id", name="uq_admin_msg"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger)
+    message_id: Mapped[int] = mapped_column(Integer)

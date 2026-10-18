@@ -383,7 +383,7 @@ async def create_order(data: OrderIn, request: Request, user: CurrentUser,
 
     notify = getattr(request.app.state, "notify_admins", None)
     if notify is not None:
-        await notify(order)
+        await notify(order, session)
     return _order_out(order)
 
 
@@ -424,7 +424,7 @@ async def cancel_order(order_id: int, request: Request, user: CurrentUser,
         )
     notify = getattr(request.app.state, "notify_admins_cancel", None)
     if notify is not None:
-        await notify(order)
+        await notify(order, session)
     return _order_out(order, await repo.history_for(session, order.id))
 
 

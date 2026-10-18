@@ -9,24 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from functools import partial
 
 from aiogram import Bot
 
 from bot.config import settings
 from bot.db.base import session_factory
 from bot.utils.lifecycle import expire_unpaid
-from bot.utils.notify import notify_customer_status
+from bot.utils.notify import notify_customer_status, sync_admin_keyboards
 
 log = logging.getLogger(__name__)
 
 
 async def sweep_once(bot: Bot) -> int:
     async with session_factory() as session:
-        cancelled = await expire_unpaid(
-            session, settings.unpaid_ttl_minutes,
-            notify=partial(notify_customer_status, bot, session),
-        )
+        async def notify(order, entry) -> None:
+            await notify_customer_status(bot, session, order, entry)
+            await sync_admin_keyboards(bot, session, order)
+
+        cancelled = await expire_unpaid(session, settings.unpaid_ttl_minutes, notify=notify)
     if cancelled:
         log.info("Автоотмена: %s", ", ".join(f"#{o.id}" for o in cancelled))
     return len(cancelled)

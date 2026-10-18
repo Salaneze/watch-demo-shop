@@ -169,7 +169,7 @@ async def order_cancel(
         f"<b>Заказ #{order.id}</b> — {fmt(order.total)} — {status_ru(order.status)}",
         reply_markup=customer_order_kb(order),
     )
-    await notify_admins_order_cancelled(bot, order, source="чат")
+    await notify_admins_order_cancelled(bot, order, source="чат", session=session)
 
 
 @router.callback_query(F.data == "noop")

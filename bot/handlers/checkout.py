@@ -9,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.db import repo
 from bot.keyboards.common import (
-    admin_order_kb,
     confirm_order_kb,
     delivery_kb,
     main_menu,
@@ -18,7 +17,7 @@ from bot.keyboards.common import (
 from bot.states import Checkout
 from bot.utils.delivery import DEFAULT_DELIVERY, delivery_option
 from bot.utils.money import fmt
-from bot.utils.notify import notify_admins_new_order, order_text, totals_lines
+from bot.utils.notify import notify_admins_new_order, order_text, send_admin_order, totals_lines
 from bot.utils.text import esc
 
 # Промокод уезжает в Order.promo_code — колонка на 32 символа. Режем на входе,
@@ -192,7 +191,7 @@ async def confirm_ok(call: CallbackQuery, state: FSMContext, session: AsyncSessi
         reply_markup=main_menu(call.from_user.id in settings.admins),
     )
 
-    await notify_admins_new_order(bot, order)
+    await notify_admins_new_order(bot, order, session=session)
 
 
 @router.message(StateFilter(None), F.photo | F.document)
@@ -211,11 +210,11 @@ async def receipt(message: Message, bot: Bot, session: AsyncSession) -> None:
     for admin_id in settings.admins:
         try:
             await message.forward(admin_id)
-            await bot.send_message(
-                admin_id,
+            await send_admin_order(
+                bot, session, admin_id,
                 f"⬆️ Чек к заказу #{last.id} на {fmt(last.total)} от "
                 f"<a href='tg://user?id={message.from_user.id}'>{esc(message.from_user.full_name)}</a>",
-                reply_markup=admin_order_kb(last),
+                last,
             )
         except Exception as e:
             log.warning("Не смог переслать чек админу %s: %s", admin_id, e)

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from bot.db.models import (
+    AdminOrderMessage,
     AuditLog,
     CartItem,
     Category,
@@ -416,6 +417,21 @@ async def mark_not_notified(s: AsyncSession, entry_id: int) -> None:
     await s.execute(
         update(OrderStatusHistory).where(OrderStatusHistory.id == entry_id).values(notified=False)
     )
+    await s.commit()
+
+
+async def remember_admin_message(s: AsyncSession, order_id: int, chat_id: int, message_id: int) -> None:
+    s.add(AdminOrderMessage(order_id=order_id, chat_id=chat_id, message_id=message_id))
+    await s.commit()
+
+
+async def admin_messages(s: AsyncSession, order_id: int) -> list[AdminOrderMessage]:
+    res = await s.scalars(select(AdminOrderMessage).where(AdminOrderMessage.order_id == order_id))
+    return list(res)
+
+
+async def forget_admin_messages(s: AsyncSession, order_id: int) -> None:
+    await s.execute(delete(AdminOrderMessage).where(AdminOrderMessage.order_id == order_id))
     await s.commit()
 
 

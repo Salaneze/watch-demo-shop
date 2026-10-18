@@ -118,11 +118,11 @@ async def lifespan(app: FastAPI):
     app.state.bot_username = me.username
     app.state.dp = dp
 
-    async def notify(order: Order) -> None:
-        await notify_admins_new_order(bot, order, source="витрина")
+    async def notify(order: Order, session=None) -> None:
+        await notify_admins_new_order(bot, order, source="витрина", session=session)
 
-    async def notify_cancel(order: Order) -> None:
-        await notify_admins_order_cancelled(bot, order, source="витрина")
+    async def notify_cancel(order: Order, session=None) -> None:
+        await notify_admins_order_cancelled(bot, order, source="витрина", session=session)
 
     app.state.notify_admins = notify
     app.state.notify_admins_cancel = notify_cancel
