@@ -135,6 +135,22 @@ function setMain(text, handler, { progress = false } = {}) {
   btn.show();
 }
 
+// Вторая нижняя кнопка (Bot API 7.10+). На старых клиентах её нет — экран
+// товара тогда рисует «Добавить ещё» у себя в разметке, см. screenProduct.
+let secondaryHandler = null;
+
+function setSecondary(text, handler) {
+  const btn = tg?.SecondaryButton;
+  if (!btn) return false;
+  if (secondaryHandler) btn.offClick(secondaryHandler);
+  secondaryHandler = handler;
+  if (!handler) { btn.hide(); return true; }
+  btn.setText(text);
+  btn.onClick(handler);
+  btn.show();
+  return true;
+}
+
 function go(screen) {
   state.screen = screen;
   state.error = '';
@@ -401,22 +417,36 @@ function screenProduct() {
     setMain('Войти, чтобы купить', startLogin);
   } else if (soldOut) {
     setMain('Нет в наличии', null);
-  } else {
-    setMain(line ? `В корзине · ${line.qty} шт` : 'Добавить в корзину', async () => {
-      setMain('Добавляю…', null, { progress: true });
-      try {
-        state.cart = await api('/cart', {
-          method: 'POST',
-          body: JSON.stringify({ product_id: p.id, delta: 1 }),
-        });
-        haptic('medium');
-        render();
-      } catch (e) {
-        if (e.status === 401) { startLogin(); return; }
-        state.error = e.message;
-        render();
+  }
+  const addOne = async () => {
+    setMain('Добавляю…', null, { progress: true });
+    setSecondary('', null);
+    try {
+      state.cart = await api('/cart', {
+        method: 'POST',
+        body: JSON.stringify({ product_id: p.id, delta: 1 }),
+      });
+      haptic('medium');
+      render();
+    } catch (e) {
+      if (e.status === 401) { startLogin(); return; }
+      state.error = e.message;
+      render();
+    }
+  };
+  // Товар уже в корзине — главная кнопка ведёт туда. Раньше она молча клала
+  // ещё штуку: человек жал «В корзине · 1 шт», ожидая перехода, и получал две.
+  let inlineAdd = null;
+  if (state.authorized && !soldOut) {
+    if (!line) {
+      setMain('Добавить в корзину', addOne);
+    } else {
+      setMain(`Перейти в корзину · ${line.qty} шт`, () => go('cart'));
+      const canAddMore = line.qty < p.stock || p.stock < 0;
+      if (canAddMore && !setSecondary('Добавить ещё', addOne)) {
+        inlineAdd = el('button', { class: 'chip add-more', text: '+ Добавить ещё', onclick: addOne });
       }
-    });
+    }
   }
 
   const specs = (p.specs || []).length
@@ -433,6 +463,7 @@ function screenProduct() {
       el('h1', { text: p.title }),
       el('div', { class: 'price', text: p.price_text }),
       note ? el('div', { class: `stock${note.low ? ' stock--low' : ''}`, text: note.text }) : null,
+      inlineAdd,
       p.description ? el('p', { text: p.description }) : null,
       specs,
       el('div', { class: 'fineprint' }, [
@@ -855,6 +886,9 @@ function aiFab() {
 
 function render() {
   app.replaceChildren();
+  // Вторая кнопка нужна только карточке товара: экран сам её поставит, а на
+  // остальных она висела бы со старым обработчиком.
+  setSecondary('', null);
 
   if (state.error) {
     app.append(el('div', { class: 'notice notice--bad', text: state.error }));
@@ -878,7 +912,7 @@ function render() {
     app.append(state.ai.open ? aiPanel() : aiFab());
   }
   // Нижнюю кнопку Telegram прячем под шторкой: она легла бы ровно на поле ввода.
-  if (state.ai.open) setMain('', null);
+  if (state.ai.open) { setMain('', null); setSecondary('', null); }
 
   // Своего хедера с крестиком нет: назад — встроенная кнопка Telegram.
   const back = tg?.BackButton;
