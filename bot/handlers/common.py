@@ -63,7 +63,10 @@ async def cb_login_confirm(cq: CallbackQuery, callback_data: LoginCB) -> None:
     )
     await cq.message.edit_reply_markup(reply_markup=None)
     await cq.message.answer(
-        "✅ Витрина авторизована — вернись в неё, каталог уже открыт."
+        # Витрина могла закрыться при переходе в чат (так на десктопе) — она
+        # подхватит вход при следующем открытии в течение 5 минут.
+        "✅ Вход подтверждён — вернись в витрину. Если она закрылась, открой её заново "
+        "в течение 5 минут, вход подхватится сам."
         if confirmed else
         "⌛ Код входа устарел. Открой витрину заново и нажми «Войти» ещё раз.",
         reply_markup=main_menu(cq.from_user.id in settings.admins),

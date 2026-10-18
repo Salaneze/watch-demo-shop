@@ -83,6 +83,38 @@ function saveSession(token) {
   state.session = token || '';
 }
 
+/* Код входа, который ждёт подтверждения в чате. На десктопе переход в чат с
+   ботом закрывает витрину, опрос умирает вместе с ней, и подтверждённый вход
+   никто не забирал: бот писал «авторизована», а новая витрина снова просила
+   войти. Теперь код живёт и между открытиями, пока жив на сервере (5 минут). */
+const PENDING_KEY = 'watchdemo_login_code';
+const PENDING_TTL_MS = 5 * 60 * 1000;
+
+function rememberPending(code) {
+  try {
+    code ? localStorage.setItem(PENDING_KEY, JSON.stringify({ code, at: Date.now() }))
+         : localStorage.removeItem(PENDING_KEY);
+  } catch { /* без хранилища останется старый путь — опрос из открытой витрины */ }
+}
+
+async function pickUpPendingLogin() {
+  let pending = null;
+  try { pending = JSON.parse(localStorage.getItem(PENDING_KEY) || 'null'); } catch { return; }
+  if (!pending?.code) return;
+  if (Date.now() - pending.at > PENDING_TTL_MS) { rememberPending(null); return; }
+  try {
+    const r = await fetch(`/api/auth/poll?code=${encodeURIComponent(pending.code)}`);
+    if (!r.ok) { rememberPending(null); return; }
+    const data = await r.json();
+    if (data.ready && data.token) {
+      rememberPending(null);
+      saveSession(data.token);
+    }
+    // Не подтверждён ещё — код оставляем: человек мог открыть витрину раньше,
+    // чем нажал кнопку в чате.
+  } catch { /* сеть — попробуем при следующем открытии */ }
+}
+
 function authHeader() {
   // Подпись Telegram в заголовке, а не в URL: адреса оседают в логах прокси,
   // а внутри лежат имя и id покупателя.
@@ -939,6 +971,7 @@ async function startLogin() {
     const res = await fetch('/api/auth/start', { method: 'POST' });
     if (!res.ok) throw new Error('Вход недоступен');
     const { code, link } = await res.json();
+    rememberPending(code);
 
     screenLoginWaiting();
     tg?.openTelegramLink ? tg.openTelegramLink(link) : window.open(link, '_blank');
@@ -949,10 +982,11 @@ async function startLogin() {
       if (attempts > 100) { clearInterval(pollTimer); return; }
       try {
         const r = await fetch(`/api/auth/poll?code=${encodeURIComponent(code)}`);
-        if (!r.ok) { clearInterval(pollTimer); screenLocked('Код входа устарел'); return; }
+        if (!r.ok) { clearInterval(pollTimer); rememberPending(null); screenLocked('Код входа устарел'); return; }
         const data = await r.json();
         if (data.ready && data.token) {
           clearInterval(pollTimer);
+          rememberPending(null);
           saveSession(data.token);
           tg?.HapticFeedback?.notificationOccurred('success');
           boot();
@@ -1026,6 +1060,8 @@ async function boot() {
   tg?.BackButton?.onClick(goBack);
   tg?.onEvent?.('themeChanged', () => render());
   state.session = savedSession();
+  // С подписью Telegram вход не нужен — незачем и дёргать сервер.
+  if (!tg?.initData && !state.session) await pickUpPendingLogin();
 
   // Каталог открыт всем: даже без авторизации человек должен увидеть товары,
   // а не пустой экран с отказом.
