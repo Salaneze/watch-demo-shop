@@ -337,17 +337,24 @@ function hero() {
 
 function filterBar() {
   const sortIndex = SORTS.findIndex(s => s.key === state.sort);
+  // «Каталог» и «Избранное» — переключатель из двух положений, а не флажок:
+  // с одним чипом «Избранное» человек не догадывался, что выход — нажать его ещё раз.
   return el('div', { class: 'filters' }, [
+    el('button', {
+      class: `chip${state.onlyFavorites ? '' : ' chip--on'}`,
+      text: '☰ Каталог',
+      onclick: () => { state.onlyFavorites = false; haptic(); render(); },
+    }),
+    el('button', {
+      class: `chip${state.onlyFavorites ? ' chip--on' : ''}`,
+      text: `♡ Избранное${state.favorites.size ? ` · ${state.favorites.size}` : ''}`,
+      onclick: () => { state.onlyFavorites = true; haptic(); render(); },
+    }),
     state.authorized ? el('button', {
       class: 'chip',
       text: '📦 Заказы',
       onclick: () => { haptic(); openOrders(); },
     }) : null,
-    el('button', {
-      class: `chip${state.onlyFavorites ? ' chip--on' : ''}`,
-      text: `♡ Избранное${state.favorites.size ? ` · ${state.favorites.size}` : ''}`,
-      onclick: () => { state.onlyFavorites = !state.onlyFavorites; haptic(); render(); },
-    }),
     el('button', {
       class: 'chip',
       text: `⇅ ${SORTS[sortIndex < 0 ? 0 : sortIndex].label}`,
@@ -412,6 +419,16 @@ function screenCatalog() {
       el('div', { text: what })])];
   }
 
+  const count = state.cart?.lines?.length || 0;
+  setMain(count ? `Корзина · ${state.cart.total_text}` : '', count ? () => go('cart') : null);
+
+  // Выдачу поиска и избранное — одной сеткой. Во вкладках находка из второй
+  // категории пряталась за первой: на любой запрос человек видел Automatic и решал,
+  // что поиск всегда отдаёт одни и те же часы.
+  if (state.query.trim() || state.onlyFavorites) {
+    return [...head, el('div', { class: 'grid grid--flat' }, cats.flatMap(c => c.products).map(productCard))];
+  }
+
   if (!cats.some(c => c.id === state.activeCategory)) state.activeCategory = cats[0].id;
   const active = cats.find(c => c.id === state.activeCategory);
 
@@ -424,9 +441,6 @@ function screenCatalog() {
     })));
 
   const grid = el('div', { class: 'grid' }, active.products.map(productCard));
-
-  const count = state.cart?.lines?.length || 0;
-  setMain(count ? `Корзина · ${state.cart.total_text}` : '', count ? () => go('cart') : null);
   return [...head, tabs, grid];
 }
 

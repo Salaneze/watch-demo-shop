@@ -528,3 +528,6 @@ html.fullscreen .ai-fab {
   font-size: 13px;
   cursor: pointer;
 }
+
+/* Выдача поиска и избранное идут без вкладок, отступ им давали именно вкладки. */
+.grid--flat { margin-top: 12px; }

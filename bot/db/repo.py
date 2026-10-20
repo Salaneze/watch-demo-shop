@@ -73,11 +73,55 @@ async def products_in_category(
         # Ищем и по названию, и по описанию: «нато» человек напишет, помня
         # ремешок, а не его артикул. like_escape — чтобы % в запросе искал
         # процент, а не «что угодно».
-        stmt = stmt.where(
-            or_(_contains_ci(Product.title, query), _contains_ci(Product.description, query))
-        )
+        stmt = stmt.where(or_(*(
+            _contains_ci(col, term)
+            for term in [query, *_aliases(query)]
+            for col in (Product.title, Product.description)
+        )))
 
     return list(await s.scalars(stmt.order_by(*SORT_ORDERS.get(sort, SORT_ORDERS[DEFAULT_SORT]))))
+
+
+# Демо-каталог на английском, а покупатель пишет по-русски: без этой таблицы
+# «ремешок» и «кварц» дают пустую выдачу. Ключ сверяется по началу слова, чтобы
+# работало и на «ремеш», и на «ремешки». Клиенту с каталогом на своём языке таблица не нужна.
+# TODO: при переводе каталога на русский удалить вместе с _aliases.
+SEARCH_ALIASES = {
+    "часы": ("automatic", "quartz", "hand-wound"),
+    "механика": ("automatic", "hand-wound"),
+    "механические": ("automatic", "hand-wound"),
+    "автомат": ("automatic",),
+    "скелетон": ("skeleton",),
+    "кварц": ("quartz",),
+    "кварцевые": ("quartz",),
+    "хронограф": ("chrono",),
+    "дайвер": ("diver",),
+    "полевые": ("field",),
+    "ремешок": ("strap", "bracelet", "nato"),
+    "ремень": ("strap", "nato"),
+    "браслет": ("bracelet",),
+    "миланский": ("milanese",),
+    "кожа": ("leather",),
+    "кожаный": ("leather",),
+    "нейлон": ("nylon",),
+    "нато": ("nato",),
+    "набор": ("set",),
+    "подарок": ("set",),
+    "сталь": ("steel",),
+    "титан": ("titanium",),
+    "сапфир": ("sapphire",),
+    "перламутр": ("mother-of-pearl",),
+}
+
+
+def _aliases(query: str) -> list[str]:
+    q = query.lower()
+    if len(q) < 3:  # «ча» совпало бы с половиной таблицы
+        return []
+    # Общая основа до пяти букв: «ремешки» находит «ремешок», «кварцевые» — «кварц»
+    return [en for ru, terms in SEARCH_ALIASES.items()
+            if q[:min(len(q), len(ru), 5)] == ru[:min(len(q), len(ru), 5)]
+            for en in terms]
 
 
 def _like_escape(value: str) -> str:

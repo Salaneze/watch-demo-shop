@@ -99,7 +99,17 @@ async def run() -> None:
         for q in ("ремешок", "КОЖАНЫЙ", "Тёмно"):
             r = await c.get("/api/catalog", params={"q": q})
             found = [p["title"] for cat in r.json()["categories"] for p in cat["products"]]
-            check(f"кириллица без учёта регистра: {q}", found == ["Ремешок Кожаный"], str(found))
+            check(f"кириллица без учёта регистра: {q}", "Ремешок Кожаный" in found, str(found))
+
+        # Демо-каталог на английском: русское слово доходит через SEARCH_ALIASES.
+        for q, want in (("ремешки", "NATO nylon, 20 mm"), ("кварц", "Kron Daily 36"),
+                        ("Миланский", "Milanese bracelet, 20 mm")):
+            r = await c.get("/api/catalog", params={"q": q})
+            found = [p["title"] for cat in r.json()["categories"] for p in cat["products"]]
+            check(f"русский синоним: {q} -> {want}", want in found, str(found))
+        r = await c.get("/api/catalog", params={"q": "ча"})
+        found = [p["title"] for cat in r.json()["categories"] for p in cat["products"]]
+        check("два символа синонимы не включают", found == [], str(found))
 
         r = await c.get("/api/catalog", params={"sort": "price_asc"})
         prices = [p["price"] for cat in r.json()["categories"] for p in cat["products"]]
