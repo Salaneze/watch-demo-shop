@@ -520,6 +520,29 @@ async function patchCart(productId, delta) {
   render();
 }
 
+/* Нативный диалог Telegram, если клиент умеет (Bot API 6.2+), иначе браузерный:
+   старые десктопы без showConfirm кнопку бы просто проглотили. */
+function askConfirm(text) {
+  return new Promise(resolve => {
+    if (tg?.showConfirm && tg.isVersionAtLeast?.('6.2')) tg.showConfirm(text, resolve);
+    else resolve(window.confirm(text));
+  });
+}
+
+async function clearCart() {
+  haptic('medium');
+  // Подтверждение обязательно: кнопка стоит рядом со степперами, промах пальцем
+  // стирает корзину целиком, а восстановить её нечем.
+  if (!await askConfirm('Убрать из корзины все товары?')) return;
+  try {
+    state.cart = await api('/cart', { method: 'DELETE' });
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
 function screenCart() {
   const cart = state.cart;
   if (!cart || !cart.lines.length) {
@@ -552,6 +575,9 @@ function screenCart() {
     el('div', { class: 'total' }, [
       el('span', { text: 'Итого' }),
       el('span', { text: cart.total_text }),
+    ]),
+    el('div', { class: 'cart-actions' }, [
+      el('button', { class: 'chip chip--danger', text: '🗑 Очистить корзину', onclick: clearCart }),
     ]),
   ];
 }
