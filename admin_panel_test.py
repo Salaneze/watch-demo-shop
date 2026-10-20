@@ -68,6 +68,108 @@ async def make_order(name: str, phone: str, delivery: str = "pickup") -> int:
         return o.id
 
 
+async def catalog(app: FastAPI) -> None:
+    """Каталог таблицей: правка в одну строку, но с теми же границами, что у бота."""
+    print("\n[7a] Каталог: кто видит")
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        check("без входа — 401", (await c.get("/api/admin/products")).status_code == 401)
+        r = await c.get("/api/admin/products", headers=H(BUYER))
+        check("покупатель — 403", r.status_code == 403, r.status_code)
+        r = await c.patch("/api/admin/products/1", headers=H(BUYER), json={"price": 1})
+        check("покупатель не правит цену", r.status_code == 403, r.status_code)
+
+        d = (await c.get("/api/admin/products", headers=H(ADMIN))).json()
+        check("товары и категории пришли", d["products"] and d["categories"], str(d)[:120])
+        p = d["products"][0]
+        pid, old_price = p["id"], p["price"]
+
+        print("\n[7b] Правка в таблице")
+        r = await c.patch(f"/api/admin/products/{pid}", headers=H(ADMIN), json={"price": old_price + 100})
+        check("цена поменялась", r.status_code == 200 and r.json()["price"] == old_price + 100, r.text[:120])
+        r = await c.get("/api/catalog")
+        shop = {x["id"]: x for cat in r.json()["categories"] for x in cat["products"]}
+        check("витрина видит новую цену", shop[pid]["price"] == old_price + 100, shop.get(pid))
+        async with session_factory() as s:
+            last = (await repo.recent_actions(s, 1))[0]
+        check("в журнале было → стало",
+              last.action == "product_edit" and f"{old_price} → {old_price + 100}" in last.details, last.details)
+
+        r = await c.patch(f"/api/admin/products/{pid}", headers=H(ADMIN), json={"is_active": False})
+        check("снят с витрины", r.status_code == 200 and r.json()["is_active"] is False, r.text[:120])
+        shop = (await c.get("/api/catalog")).json()
+        check("на витрине его нет", pid not in {x["id"] for cat in shop["categories"] for x in cat["products"]})
+        d = (await c.get("/api/admin/products", headers=H(ADMIN))).json()
+        check("в панели скрытый остаётся", pid in {x["id"] for x in d["products"]})
+        await c.patch(f"/api/admin/products/{pid}", headers=H(ADMIN), json={"is_active": True})
+
+        r = await c.patch(f"/api/admin/products/{pid}", headers=H(ADMIN), json={"stock": -1})
+        check("остаток -1 — без учёта", r.status_code == 200 and r.json()["stock"] == -1, r.text[:120])
+        r = await c.patch(f"/api/admin/products/{pid}", headers=H(ADMIN), json={"title": "  Новое имя  "})
+        check("название обрезано по краям", r.json()["title"] == "Новое имя", r.text[:120])
+
+        print("\n[7c] Мусор не проходит")
+        for label, body in [
+            ("цена 0", {"price": 0}), ("цена отрицательная", {"price": -5}),
+            ("цена строкой", {"price": "120"}), ("цена дробью", {"price": 12.5}),
+            ("цена true", {"price": True}), ("цена огромная", {"price": 10**12}),
+            ("остаток -2", {"stock": -2}), ("название из пробелов", {"title": "   "}),
+            ("название 200 символов", {"title": "x" * 200}),
+            ("is_active строкой", {"is_active": "false"}),
+            ("чужое поле photo_file_id", {"photo_file_id": "AgACevil"}),
+            ("несуществующая категория", {"category_id": 999999}),
+        ]:
+            r = await c.patch(f"/api/admin/products/{pid}", headers=H(ADMIN), json=body)
+            check(f"{label} — 422", r.status_code == 422, f"{r.status_code} {r.text[:100]}")
+        r = await c.patch("/api/admin/products/999999", headers=H(ADMIN), json={"price": 10})
+        check("несуществующий товар — 404", r.status_code == 404, r.status_code)
+        after = next(x for x in (await c.get("/api/admin/products", headers=H(ADMIN))).json()["products"]
+                     if x["id"] == pid)
+        check("после мусора цена прежняя", after["price"] == old_price + 100, after["price"])
+
+        print("\n[7d] Новый товар")
+        cat_id = d["categories"][0]["id"]
+        r = await c.post("/api/admin/products", headers=H(ADMIN),
+                         json={"title": "Тестовые часы", "category_id": cat_id, "price": 990, "stock": 3})
+        check("создан", r.status_code == 200 and r.json()["stock"] == 3, r.text[:160])
+        new_id = r.json()["id"]
+        shop = (await c.get("/api/catalog")).json()
+        check("сразу на витрине", new_id in {x["id"] for cat in shop["categories"] for x in cat["products"]})
+        r = await c.post("/api/admin/products", headers=H(ADMIN), json={"title": "Без цены", "category_id": cat_id})
+        check("без цены — 422", r.status_code == 422, r.status_code)
+        r = await c.post("/api/admin/products", headers=H(BUYER),
+                         json={"title": "Чужой", "category_id": cat_id, "price": 1})
+        check("покупатель не создаёт", r.status_code == 403, r.status_code)
+
+        print("\n[7e] Фото товару из панели — через бота")
+        from types import SimpleNamespace
+        from bot.handlers.admin import set_product_photo
+
+        class FakeMessage:
+            def __init__(self, caption):
+                self.caption = caption
+                self.photo = [SimpleNamespace(file_id="small"), SimpleNamespace(file_id="AgAC-big")]
+                self.from_user = SimpleNamespace(id=ADMIN)
+                self.answers = []
+
+            async def answer(self, text, **kw):
+                self.answers.append(text)
+
+        async with session_factory() as s:
+            m = FakeMessage(f"/photo {new_id}")
+            await set_product_photo(m, s)
+            p = await repo.product(s, new_id)
+            check("крупное фото встало товару", p.photo_file_id == "AgAC-big", p.photo_file_id)
+            m = FakeMessage("/photo abc")
+            await set_product_photo(m, s)
+            check("кривой номер — подсказка, не падение", "/photo 12" in m.answers[-1], m.answers)
+            m = FakeMessage("/photo 999999")
+            await set_product_photo(m, s)
+            check("чужой номер — «не найден»", "не найден" in m.answers[-1], m.answers)
+        r = await c.get("/api/admin/products", headers=H(ADMIN))
+        row = next(x for x in r.json()["products"] if x["id"] == new_id)
+        check("в панели появилась картинка", bool(row["image"]), row)
+
+
 async def main() -> None:
     if DB_FILE.exists():
         DB_FILE.unlink()
@@ -188,6 +290,8 @@ async def main() -> None:
         r = await c.post(f"/api/admin/orders/{last}/transition", headers=H(ADMIN),
                          json={"from_status": st0, "to_status": "paid"})
         check("без бота переход проходит, notified=false", r.status_code == 200 and r.json()["notified"] is False, r.text)
+
+    await catalog(app)
 
     print("\n[8] Кнопка панели в боте")
     from bot.config import settings

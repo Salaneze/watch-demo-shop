@@ -13,9 +13,9 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
-from api.routes import CurrentUser, Session, _order_out, iso_utc
+from api.routes import CurrentUser, Session, _image_url, _order_out, iso_utc
 from bot.config import settings
 from bot.db import repo
 from bot.db.models import OrderStatus, status_ru
@@ -121,3 +121,102 @@ async def transition(order_id: int, data: TransitionIn, request: Request, sessio
     card = await _card(session, order)
     card["notified"] = notified
     return card
+
+
+# ---------------------------------------------------------------- каталог
+# Таблица вместо пошагового /addproduct в боте: поменять цену у десяти товаров
+# через FSM — это десять диалогов по пять вопросов. Фото здесь не грузятся:
+# photo_file_id выдаёт Telegram, поэтому снимки по-прежнему шлются боту.
+
+PRICE_MAX = 10_000_000
+STOCK_MAX = 1_000_000
+
+
+class _ProductFields(BaseModel):
+    # Strict-типы: в лаксе pydantic превратил бы "120" и true в число, и
+    # опечатка в клиенте молча поставила бы цену 1.
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(None, max_length=128)
+    description: str | None = Field(None, max_length=2000)
+    price: StrictInt | None = Field(None, ge=1, le=PRICE_MAX)
+    stock: StrictInt | None = Field(None, ge=-1, le=STOCK_MAX)
+    category_id: StrictInt | None = None
+
+    @field_validator("title", "description")
+    @classmethod
+    def strip_text(cls, v: str | None) -> str | None:
+        return v.strip() if v is not None else None
+
+    @field_validator("title")
+    @classmethod
+    def title_not_blank(cls, v: str | None) -> str | None:
+        if v is not None and len(v) < 2:
+            raise ValueError("название короче двух символов")
+        return v
+
+
+class ProductPatch(_ProductFields):
+    is_active: StrictBool | None = None
+
+
+class ProductNew(_ProductFields):
+    title: str = Field(max_length=128)
+    price: StrictInt = Field(ge=1, le=PRICE_MAX)
+    category_id: StrictInt
+    stock: StrictInt = Field(-1, ge=-1, le=STOCK_MAX)
+
+
+def _product_row(p) -> dict:
+    return {
+        "id": p.id, "category_id": p.category_id, "title": p.title,
+        "description": p.description, "price": p.price, "price_text": fmt(p.price),
+        "stock": p.stock, "is_active": p.is_active,
+        # Картинку API отдаёт только у товара на витрине — у скрытого была бы 404.
+        "image": _image_url(p) if p.is_active else None,
+    }
+
+
+async def _known_category(session, category_id: int) -> None:
+    if await repo.category(session, category_id) is None:
+        raise HTTPException(status_code=422, detail="Нет такой категории")
+
+
+@router.get("/products")
+async def products(session: Session, user=Admin) -> dict:
+    return {
+        "categories": [{"id": c.id, "title": c.title, "is_active": c.is_active}
+                       for c in await repo.all_categories(session)],
+        "products": [_product_row(p) for p in await repo.all_products(session)],
+    }
+
+
+@router.patch("/products/{product_id}")
+async def product_patch(product_id: int, data: ProductPatch, session: Session,
+                        user=Admin) -> dict:
+    p = await repo.product(session, product_id)
+    if p is None:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    changes = data.model_dump(exclude_unset=True, exclude_none=True)
+    if "category_id" in changes:
+        await _known_category(session, changes["category_id"])
+    # Журнал пишет «было → стало»: через неделю «кто поставил цену 1» без
+    # старого значения не разобрать.
+    diff = [f"{k}: {getattr(p, k)!r} → {v!r}" for k, v in changes.items() if getattr(p, k) != v]
+    for k, v in changes.items():
+        setattr(p, k, v)
+    await session.commit()
+    if diff:
+        await repo.log_action(session, user.id, "product_edit", f"product#{p.id}",
+                              "; ".join(diff)[:500])
+    return _product_row(p)
+
+
+@router.post("/products")
+async def product_create(data: ProductNew, session: Session, user=Admin) -> dict:
+    await _known_category(session, data.category_id)
+    p = await repo.add_product(session, data.category_id, data.title, data.description or "",
+                               data.price, None, stock=data.stock)
+    await repo.log_action(session, user.id, "product_add", f"product#{p.id}",
+                          f"{p.title} · {fmt(p.price)} · веб-панель")
+    return _product_row(p)

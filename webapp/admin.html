@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Watch Demo — заказы</title>
+<title>Watch Demo — панель</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://unpkg.com/vue@3.4.38/dist/vue.global.prod.js"></script>
 <style>
@@ -100,6 +100,24 @@ tr.row.sel { background: var(--secondary-bg); box-shadow: inset 3px 0 0 var(--bu
 .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg);
   padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: calc(100vw - 32px); }
 
+.views { display: flex; gap: 4px; }
+.views .tab { font-size: 14px; }
+.cat { max-width: 1100px; }
+.cat td { vertical-align: middle; padding-top: 6px; padding-bottom: 6px; }
+.cat tr.off td:not(:last-child) { opacity: .5; }
+.cell { width: 100%; border: 1px solid transparent; background: transparent; border-radius: 8px; padding: 6px 8px; min-height: 36px; }
+.cell:hover { border-color: var(--separator); }
+.cell:focus { border-color: var(--link); background: var(--secondary-bg); outline: none; }
+.cell.n { text-align: right; max-width: 110px; margin-left: auto; display: block; }
+.cat th.r { text-align: right; padding-right: 18px; }
+select.cell { cursor: pointer; }
+.pic { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; background: var(--secondary-bg); display: block; }
+.newrow { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.newrow .search { flex: 1 1 180px; width: auto; }
+.newrow .short { flex: 0 1 120px; }
+.switch { width: 20px; height: 20px; accent-color: var(--button); cursor: pointer; }
+.foot { padding: 0 20px 20px; }
+
 @media (max-width: 860px) {
   .layout { grid-template-columns: 1fr; height: auto; }
   .list { border-right: 0; }
@@ -128,12 +146,16 @@ tr.row.sel { background: var(--secondary-bg); box-shadow: inset 3px 0 0 var(--bu
 
   <template v-else>
     <header class="top">
-      <b>Watch Demo</b><span class="dim">заказы</span>
+      <b>Watch Demo</b>
+      <nav class="views" aria-label="Раздел">
+        <button class="tab" :class="{on: view === 'orders'}" @click="view = 'orders'">Заказы</button>
+        <button class="tab" :class="{on: view === 'catalog'}" @click="openCatalog">Каталог</button>
+      </nav>
       <span class="who">{{ me.name }}</span>
       <button class="link" @click="logout" v-if="!inTelegram">Выйти</button>
     </header>
 
-    <div class="layout">
+    <div class="layout" v-if="view === 'orders'">
       <section class="list">
         <div class="bar">
           <input class="search" v-model="query" @input="debouncedLoad" placeholder="Номер, имя или телефон" aria-label="Поиск заказа">
@@ -206,6 +228,54 @@ tr.row.sel { background: var(--secondary-bg); box-shadow: inset 3px 0 0 var(--bu
       </aside>
       <div v-else class="placeholder">Выберите заказ слева</div>
     </div>
+
+    <section class="list cat" v-else>
+      <div class="bar">
+        <div class="newrow">
+          <input class="search" v-model="catQuery" placeholder="Найти товар" aria-label="Поиск товара">
+          <button class="btn" @click="adding = !adding">{{ adding ? 'Отмена' : '+ Товар' }}</button>
+        </div>
+        <form class="newrow" v-if="adding" @submit.prevent="createProduct">
+          <input class="search" v-model="draft.title" placeholder="Название" maxlength="128" required>
+          <select class="search short" v-model.number="draft.category_id" aria-label="Категория">
+            <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.title }}</option>
+          </select>
+          <input class="search short num" v-model="draft.price" inputmode="numeric" placeholder="Цена" required>
+          <input class="search short num" v-model="draft.stock" inputmode="numeric" placeholder="Остаток, ∞">
+          <button class="btn primary" :disabled="busy">Добавить</button>
+        </form>
+        <nav class="tabs" aria-label="Категория">
+          <button class="tab" :class="{on: !catFilter}" @click="catFilter = 0">Все<span class="n num">{{ products.length }}</span></button>
+          <button v-for="c in categories" :key="c.id" class="tab" :class="{on: catFilter === c.id}"
+                  @click="catFilter = c.id">{{ c.title }}<span class="n num">{{ countIn(c.id) }}</span></button>
+        </nav>
+      </div>
+      <table v-if="shownProducts.length">
+        <thead><tr><th class="hide-m"></th><th title="Номер для /photo в боте">№</th><th>Название</th><th class="hide-m">Категория</th>
+          <th class="r">Цена</th><th class="r">Остаток</th><th title="Показывать на витрине">Витрина</th></tr></thead>
+        <tbody>
+          <tr v-for="p in shownProducts" :key="p.id" :class="{off: !p.is_active}">
+            <td class="hide-m"><img v-if="p.image" class="pic" :src="p.image" alt="" loading="lazy"><div v-else class="pic"></div></td>
+            <td class="dim num">{{ p.id }}</td>
+            <td><input class="cell" :value="p.title" maxlength="128" aria-label="Название"
+                       @change="save(p, 'title', $event.target.value, $event)"></td>
+            <td class="hide-m"><select class="cell" :value="p.category_id" aria-label="Категория"
+                       @change="save(p, 'category_id', +$event.target.value, $event)">
+              <option v-for="c in categories" :key="c.id" :value="c.id">{{ c.title }}</option></select></td>
+            <td><input class="cell n num" :value="p.price" inputmode="numeric" aria-label="Цена"
+                       @change="save(p, 'price', toInt($event.target.value), $event)"></td>
+            <td><input class="cell n num" :value="p.stock < 0 ? '' : p.stock" placeholder="∞" inputmode="numeric"
+                       aria-label="Остаток, пусто — без учёта"
+                       @change="save(p, 'stock', $event.target.value.trim() === '' ? -1 : toInt($event.target.value), $event)"></td>
+            <td><input type="checkbox" class="switch" :checked="p.is_active" aria-label="На витрине"
+                       @change="save(p, 'is_active', $event.target.checked, $event)"></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-else class="empty">{{ catQuery ? 'Ничего не нашлось' : 'Товаров пока нет' }}</div>
+      <p class="dim foot">Фото — в боте: снимок с подписью /photo и номер товара (картинки хранит Telegram).
+        Пустой остаток — товар без учёта склада.</p>
+    </section>
   </template>
   <div class="toast" v-if="toast" role="status">{{ toast }}</div>
 </div>
@@ -224,17 +294,24 @@ Vue.createApp({
     orders: [], counts: {}, statuses: [], filter: "", query: "", card: null,
     pending: null, note: "", busy: false, token: stored(),
     inTelegram: !!(TG && TG.initData),
+    view: "orders", products: [], categories: [], catFilter: 0, catQuery: "", adding: false,
+    draft: { title: "", category_id: null, price: "", stock: "" },
     actorTitle: { admin: "админ", customer: "покупатель", system: "автоматически" },
   }),
   computed: {
     total() { return Object.values(this.counts).reduce((a, b) => a + b, 0); },
+    shownProducts() {
+      const q = this.catQuery.trim().toLowerCase();
+      return this.products.filter(p => (!this.catFilter || p.category_id === this.catFilter)
+        && (!q || p.title.toLowerCase().includes(q)));
+    },
   },
   async mounted() {
     // Таблица заказов в половине экрана нечитаема — раскрываем сразу.
     if (TG) { TG.ready(); TG.expand(); }
     await this.enter();
     // Новые заказы подтягиваем сами — админ не должен жать F5.
-    setInterval(() => this.state === "ready" && !this.busy && this.load(), 15000);
+    setInterval(() => this.state === "ready" && this.view === "orders" && !this.busy && this.load(), 15000);
   },
   methods: {
     auth() {
@@ -316,6 +393,54 @@ Vue.createApp({
         // 409: заказ уже сменили в боте или в соседней вкладке — показать как есть.
         if (e.status === 409) { await this.open(this.card.id); this.error = e.message; await this.load(); }
       } finally { this.busy = false; }
+    },
+    async openCatalog() {
+      this.view = "catalog";
+      try {
+        const d = await this.api("/api/admin/products");
+        this.products = d.products; this.categories = d.categories;
+        if (!this.draft.category_id && d.categories.length) this.draft.category_id = d.categories[0].id;
+      } catch (e) { if (e.status === 401) this.logout(); else this.flash(e.message); }
+    },
+    countIn(id) { return this.products.filter(p => p.category_id === id).length; },
+    // Пробелы-разделители тысяч убираем (\s в JS ловит и неразрывный), а "12.5",
+    // "12k", "-3" — не число. NaN не отправляем: сервер ответил бы непонятным
+    // "Input should be a valid integer".
+    toInt(s) { const v = String(s).replace(/\s/g, ""); return /^\d+$/.test(v) ? Number(v) : NaN; },
+    async save(p, field, value, ev) {
+      if (value === p[field]) return;
+      const revert = () => {
+        // Поле откатываем к тому, что лежит в базе: иначе на экране осталась бы
+        // цена, которой у товара нет.
+        if (!ev || !ev.target) return;
+        if (ev.target.type === "checkbox") ev.target.checked = p[field];
+        else ev.target.value = field === "stock" && p.stock < 0 ? "" : p[field];
+      };
+      if (Number.isNaN(value)) { revert(); this.flash("Нужно целое число"); return; }
+      try {
+        const fresh = await this.api("/api/admin/products/" + p.id, { method: "PATCH", body: { [field]: value } });
+        Object.assign(p, fresh);
+        this.flash("Сохранено");
+      } catch (e) {
+        if (e.status === 401) return this.logout();
+        revert();
+        this.flash(e.message);
+      }
+    },
+    async createProduct() {
+      const price = this.toInt(this.draft.price);
+      const stock = String(this.draft.stock).trim() === "" ? -1 : this.toInt(this.draft.stock);
+      if (Number.isNaN(price) || Number.isNaN(stock)) { this.flash("Цена и остаток — целые числа"); return; }
+      this.busy = true;
+      try {
+        const p = await this.api("/api/admin/products", { method: "POST",
+          body: { title: this.draft.title, category_id: this.draft.category_id, price, stock } });
+        this.products.push(p);
+        this.draft = { title: "", category_id: this.draft.category_id, price: "", stock: "" };
+        this.adding = false;
+        this.flash(`Товар №${p.id} добавлен. Фото — боту с подписью /photo ${p.id}`);
+      } catch (e) { this.flash(e.message); }
+      finally { this.busy = false; }
     },
     flash(m) { this.toast = m; clearTimeout(this._t); this._t = setTimeout(() => this.toast = "", 3000); },
     when(iso) { return new Date(iso).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }); },

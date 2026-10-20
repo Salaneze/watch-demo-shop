@@ -299,3 +299,27 @@ async def _finish_product(
                           f"product#{p.id}", f"{p.title} — {fmt(p.price)}")
     await state.clear()
     await message.answer(f"✅ Товар «{esc(p.title)}» добавлен (id={p.id}, {fmt(p.price)}).")
+
+
+# Фото к уже существующему товару — для тех, что заведены в веб-панели. Там
+# картинку не загрузить: photo_file_id выдаёт Telegram, а не наш сервер.
+@router.message(Command("photo"), F.photo)
+async def set_product_photo(message: Message, session: AsyncSession) -> None:
+    parts = (message.caption or "").split()
+    if len(parts) < 2 or not parts[1].isdigit():
+        await message.answer("Подпись к фото: <code>/photo 12</code>, где 12 — номер товара из панели.")
+        return
+    p = await repo.product(session, int(parts[1]))
+    if p is None:
+        await message.answer("Товар не найден.")
+        return
+    p.photo_file_id = message.photo[-1].file_id
+    await session.commit()
+    await repo.log_action(session, message.from_user.id, "product_photo", f"product#{p.id}", p.title)
+    await message.answer(f"🖼 Фото у «{esc(p.title)}» обновлено.")
+
+
+@router.message(Command("photo"))
+async def set_product_photo_hint(message: Message) -> None:
+    # Команда пришла текстом, без снимка — иначе её молча съел бы поиск по каталогу.
+    await message.answer("Пришлите фото с подписью <code>/photo 12</code>, где 12 — номер товара.")

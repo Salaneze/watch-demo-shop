@@ -502,6 +502,18 @@ async def add_product(
     return p
 
 
+async def all_categories(s: AsyncSession) -> list[Category]:
+    """Все категории, включая скрытые: панели надо показать и их."""
+    res = await s.scalars(select(Category).order_by(Category.sort, Category.id))
+    return list(res)
+
+
+async def all_products(s: AsyncSession) -> list[Product]:
+    """Весь каталог для панели, со снятыми с продажи — их тоже правят и возвращают."""
+    res = await s.scalars(select(Product).order_by(Product.category_id, Product.id))
+    return list(res)
+
+
 async def toggle_product(s: AsyncSession, product_id: int) -> Product | None:
     p = await s.get(Product, product_id)
     if p is None:
