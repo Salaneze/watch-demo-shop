@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Иконка заставки Mini App (BotFather → Configure Mini App → Loading Screen).
+       Один цвет на прозрачном фоне: фон заставки задаётся в BotFather отдельно
+       для светлой и тёмной темы, значок обязан читаться на обоих. -->
+  <g fill="none" stroke="#C9A45C" stroke-linecap="round">
+    <rect x="206" y="40" width="100" height="70" rx="14" stroke-width="20"/>
+    <rect x="206" y="402" width="100" height="70" rx="14" stroke-width="20"/>
+    <circle cx="256" cy="256" r="150" stroke-width="24"/>
+    <path d="M256 140v22M256 350v22M140 256h22M350 256h22" stroke-width="16"/>
+    <path d="M256 256V180M256 256l52 34" stroke-width="20"/>
+    <path d="M426 238v36" stroke-width="22"/>
+  </g>
+  <circle cx="256" cy="256" r="14" fill="#C9A45C"/>
+</svg>

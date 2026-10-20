@@ -7,3 +7,6 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# исходники заставки на 2048 px: до 2,7 МБ, в BotFather идёт 512
+branding/*-2048.png
