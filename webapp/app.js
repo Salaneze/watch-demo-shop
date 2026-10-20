@@ -26,6 +26,8 @@ const state = {
   promo: null,                // ответ /api/promo по последнему введённому коду
   promoInput: '',
   form: { name: '', phone: '', address: '', comment: '' },
+  contact: '',                // подписанный ответ requestContact; номер в form.phone только для показа
+  homeScreen: 'unsupported',  // ответ checkHomeScreenStatus: added / missed / unknown / unsupported
   error: '',
   session: '',                // сессия для клиентов без initData
   authorized: false,
@@ -46,6 +48,13 @@ function el(tag, props = {}, children = []) {
     if (child) node.append(child);
   }
   return node;
+}
+
+/* Каждый новый метод Telegram сначала через версию клиента: на старом SDK метод
+   может быть объявлен, но бросает WebAppMethodUnsupported, и витрина падает
+   целиком из-за одной необязательной кнопки. */
+function supports(version) {
+  try { return Boolean(tg?.isVersionAtLeast?.(version)); } catch { return false; }
 }
 
 function haptic(kind = 'light') {
@@ -637,8 +646,52 @@ async function applyPromo() {
   render();
 }
 
+/* Номер одной кнопкой (Bot API 6.9+). Только для входа по initData: у входа через
+   бота подписи requestContact нет, а номер без подписи сервер всё равно не примет
+   как «из Telegram». Ручной ввод остаётся всегда — делиться номером никто не обязан. */
+function canRequestContact() {
+  return Boolean(tg?.initData && tg.requestContact && supports('6.9'));
+}
+
+function requestPhone() {
+  haptic();
+  tg.requestContact((shared, event) => {
+    const phone = event?.responseUnsafe?.contact?.phone_number;
+    if (!shared || !event?.response || !phone) return;  // отказался — остаётся ручной ввод
+    state.contact = event.response;
+    state.form.phone = phone.startsWith('+') ? phone : `+${phone}`;
+    tg.HapticFeedback?.notificationOccurred('success');
+    render();
+  });
+}
+
+function dropContact() {
+  state.contact = '';
+  state.form.phone = '';
+  haptic();
+  render();
+}
+
+function phoneField(f) {
+  if (state.contact) {
+    return el('div', { class: 'field' }, [
+      el('label', { text: f.label }),
+      el('div', { class: 'phone-verified' }, [
+        el('span', { text: state.form.phone }),
+        el('span', { class: 'phone-badge', text: '✓ из Telegram' }),
+        el('button', { class: 'link-btn', text: 'Другой номер', onclick: dropContact }),
+      ]),
+    ]);
+  }
+  return null;
+}
+
 function screenCheckout() {
   const fields = FIELDS.map(f => {
+    if (f.key === 'phone') {
+      const verified = phoneField(f);
+      if (verified) return verified;
+    }
     const input = el(f.key === 'comment' ? 'textarea' : 'input', {
       placeholder: f.placeholder,
       value: state.form[f.key],
@@ -649,8 +702,12 @@ function screenCheckout() {
         // и закрывается клавиатура. Обновляем только состояние кнопки.
         syncCheckoutButton();
       },
+      type: f.key === 'phone' ? 'tel' : null,
     });
-    return el('div', { class: 'field' }, [el('label', { text: f.label }), input]);
+    const share = f.key === 'phone' && canRequestContact()
+      ? el('button', { class: 'chip share-phone', text: '📱 Взять номер из Telegram', onclick: requestPhone })
+      : null;
+    return el('div', { class: 'field' }, [el('label', { text: f.label }), share, input]);
   });
 
   const options = el('div', { class: 'options' }, state.deliveryOptions.map(o =>
@@ -752,8 +809,10 @@ async function submitOrder() {
         // Только код способа и текст промокода: цены считает сервер.
         delivery: state.delivery,
         promo_code: state.promo?.valid ? state.promo.code : '',
+        contact: state.contact,
       }),
     });
+    state.contact = '';
     state.lastOrder = order;
     state.orders = null;  // список заказов перечитается при следующем открытии
     state.cart = { lines: [], total: 0, total_text: '', removed: [] };
@@ -765,6 +824,8 @@ async function submitOrder() {
   } catch (e) {
     // Заказ мог не пройти из-за изменившейся корзины — показываем её заново,
     // иначе покупатель будет жать кнопку в пустоту.
+    // 400 на номере: подпись протухла (час) или не сошлась — дальше вручную.
+    if (e.status === 400 && state.contact) { state.contact = ''; state.form.phone = ''; }
     try { state.cart = await api('/cart'); } catch { /* покажем что есть */ }
     tg?.HapticFeedback?.notificationOccurred('error');
     state.screen = 'cart';
@@ -827,6 +888,13 @@ function screenOrders() {
 function screenDone() {
   const o = state.lastOrder;
   setMain('Вернуться в каталог', () => go('catalog'));
+  // Предлагаем ярлык после заказа, а не на входе: человек только что купил и
+  // вернётся за статусом — просьба «добавь на экран» к месту именно сейчас.
+  const homeOffer = state.homeScreen === 'missed'
+    ? el('div', { class: 'cart-actions' }, [
+        el('button', { class: 'chip', text: '📲 Добавить магазин на экран', onclick: addToHome }),
+      ])
+    : null;
   return [
     el('div', { class: 'empty' }, [
       el('span', { text: '✅' }),
@@ -845,7 +913,13 @@ function screenDone() {
         ? el('div', { class: 'order-line', text: `${o.delivery_title} — ${o.delivery_cost_text}` })
         : el('div', { class: 'order-line', text: `${o.delivery_title} — бесплатно` }),
     ]),
+    homeOffer,
   ];
+}
+
+function addToHome() {
+  haptic();
+  try { tg.addToHomeScreen(); } catch { /* клиент передумал поддерживать — кнопка просто молчит */ }
 }
 
 /* ---------- отрисовка ---------- */
@@ -975,6 +1049,41 @@ function render() {
   // Своего хедера с крестиком нет: назад — встроенная кнопка Telegram.
   const back = tg?.BackButton;
   if (back) (state.screen === 'catalog' || state.screen === 'done') && !state.ai.open ? back.hide() : back.show();
+
+  // Свайп вниз на оформлении закрывал витрину вместе с набранным адресом.
+  // Только здесь: в каталоге переспрашивать «точно закрыть?» — раздражать.
+  if (supports('6.2')) {
+    state.screen === 'checkout' ? tg.enableClosingConfirmation() : tg.disableClosingConfirmation();
+  }
+}
+
+/* Полный экран — только на телефонах: на десктопе он разворачивает окно
+   поверх всего, а выигрыша в площади там нет. Верх экрана в этом режиме
+   накрывает шапка Telegram, отступ под неё ставит класс .fullscreen. */
+function syncFullscreen() {
+  document.documentElement.classList.toggle('fullscreen', Boolean(tg?.isFullscreen));
+}
+
+function setupTelegramOnce() {
+  if (!tg || setupTelegramOnce.done) return;
+  // boot() вызывается повторно после входа через бота; подписки, навешанные
+  // дважды, срабатывали дважды — «назад» перескакивал через экран.
+  setupTelegramOnce.done = true;
+  tg.ready();
+  tg.expand();
+  tg.BackButton?.onClick(goBack);
+  tg.onEvent?.('themeChanged', () => render());
+  if (!supports('8.0')) return;
+  tg.onEvent('fullscreenChanged', syncFullscreen);
+  tg.onEvent('homeScreenAdded', () => {
+    state.homeScreen = 'added';
+    if (state.screen === 'done') render();
+  });
+  try { tg.checkHomeScreenStatus(status => { state.homeScreen = status; }); } catch { /* нет так нет */ }
+  if (['ios', 'android'].includes(tg.platform)) {
+    try { tg.requestFullscreen(); } catch { /* fullscreenFailed — остаёмся в обычном окне */ }
+  }
+  syncFullscreen();
 }
 
 function goBack() {
@@ -1081,10 +1190,7 @@ function screenLocked(message) {
 }
 
 async function boot() {
-  tg?.ready();
-  tg?.expand();
-  tg?.BackButton?.onClick(goBack);
-  tg?.onEvent?.('themeChanged', () => render());
+  setupTelegramOnce();
   state.session = savedSession();
   // С подписью Telegram вход не нужен — незачем и дёргать сервер.
   if (!tg?.initData && !state.session) await pickUpPendingLogin();

@@ -147,6 +147,10 @@ class OrderIn(BaseModel):
     # сколько покупатель захочет.
     delivery: str = Field(default=DEFAULT_DELIVERY, max_length=32)
     promo_code: str = Field(default="", max_length=32)
+    # Подписанный ответ WebApp.requestContact, как его отдал Telegram. Пришёл —
+    # телефон берётся из него, а поле phone игнорируется: иначе «номер из
+    # Telegram» значил бы ровно то же, что номер, набранный руками.
+    contact: str = Field(default="", max_length=2048)
 
     @field_validator("delivery")
     @classmethod

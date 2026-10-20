@@ -42,15 +42,24 @@ def _secret_key(bot_token: str) -> bytes:
     return hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
 
 
-def parse_init_data(raw: str, *, ttl: int = DEFAULT_TTL) -> WebAppUser:
-    """Проверяет подпись и возвращает пользователя. Кидает InitDataError на любой отказ."""
+def _verified_pairs(raw: str, ttl: int) -> dict[str, str]:
+    """Пары из подписанной строки Telegram, если подпись сошлась и не протухла.
+
+    Той же схемой Telegram подписывает и initData, и ответ requestContact,
+    поэтому проверка одна на оба случая.
+    """
     if not raw:
         raise InitDataError("пустой initData")
 
     try:
-        pairs = dict(parse_qsl(raw, strict_parsing=True))
+        parsed = parse_qsl(raw, strict_parsing=True)
     except ValueError as exc:
         raise InitDataError("initData не разбирается как query string") from exc
+    pairs = dict(parsed)
+    # Telegram ключи не повторяет. Повтор значит склейку, а dict молча оставил бы
+    # последнее значение — проверяли бы одно, а читатель строки видел бы другое.
+    if len(pairs) != len(parsed):
+        raise InitDataError("ключ повторяется")
 
     received = pairs.pop("hash", None)
     if not received:
@@ -74,7 +83,12 @@ def parse_init_data(raw: str, *, ttl: int = DEFAULT_TTL) -> WebAppUser:
     age = time.time() - auth_date
     if age > ttl:
         raise InitDataError(f"initData протух: {int(age)}с > {ttl}с")
+    return pairs
 
+
+def parse_init_data(raw: str, *, ttl: int = DEFAULT_TTL) -> WebAppUser:
+    """Проверяет подпись и возвращает пользователя. Кидает InitDataError на любой отказ."""
+    pairs = _verified_pairs(raw, ttl)
     raw_user = pairs.get("user")
     if not raw_user:
         raise InitDataError("в initData нет user")
@@ -84,7 +98,7 @@ def parse_init_data(raw: str, *, ttl: int = DEFAULT_TTL) -> WebAppUser:
         raise InitDataError("user не разбирается как JSON") from exc
 
     user_id = user.get("id")
-    if not isinstance(user_id, int):
+    if type(user_id) is not int:  # bool — подкласс int, True прошёл бы как id 1
         raise InitDataError("у пользователя нет числового id")
 
     full_name = " ".join(
@@ -96,6 +110,33 @@ def parse_init_data(raw: str, *, ttl: int = DEFAULT_TTL) -> WebAppUser:
         full_name=full_name or f"id{user_id}",
         language_code=user.get("language_code"),
     )
+
+
+def parse_contact(raw: str, *, user_id: int, ttl: int = DEFAULT_TTL) -> str:
+    """Телефон из ответа WebApp.requestContact — только если его подписал Telegram.
+
+    На фронте номер лежит и в responseUnsafe, но оттуда его подставит кто угодно.
+    Сверка user_id обязательна: подписанный ответ одного покупателя, отправленный
+    из-под другой учётки, иначе прошёл бы как «подтверждённый номер».
+    """
+    pairs = _verified_pairs(raw, ttl)
+    try:
+        contact = json.loads(pairs.get("contact", ""))
+    except json.JSONDecodeError as exc:
+        raise InitDataError("contact не разбирается как JSON") from exc
+    if not isinstance(contact, dict):
+        raise InitDataError("contact не объект")
+    owner = contact.get("user_id")
+    # type() is int, а не ==: 555.0 == 555 и True == 1 в Python.
+    if type(owner) is not int or owner != user_id:
+        raise InitDataError("номер принадлежит другому пользователю")
+    phone = contact.get("phone_number")
+    if not isinstance(phone, str) or not phone.strip():
+        raise InitDataError("в contact нет номера")
+    phone = phone.strip()
+    # Telegram отдаёт номер без плюса ("79991234567") — в заказе он должен
+    # читаться так же, как набранный руками.
+    return phone if phone.startswith("+") else f"+{phone}"
 
 
 def init_data_from_header(header: str | None) -> str:

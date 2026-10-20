@@ -15,7 +15,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.auth import InitDataError, WebAppUser, init_data_from_header, parse_init_data
+from api.auth import (InitDataError, WebAppUser, init_data_from_header, parse_contact,
+                      parse_init_data)
 from api.schemas import (
     AiIn,
     AiOut,
@@ -368,9 +369,18 @@ async def create_order(data: OrderIn, request: Request, user: CurrentUser,
             status_code=409,
             detail="Из корзины пропали товары: " + ", ".join(removed),
         )
+    phone = data.phone
+    if data.contact:
+        try:
+            phone = parse_contact(data.contact, user_id=user.id)
+        except InitDataError:
+            # Тихо подставить набранное нельзя: покупатель думает, что отдал
+            # номер из Telegram, а админ получил бы что-то другое.
+            raise HTTPException(status_code=400,
+                                detail="Номер из Telegram не подтвердился — введите его вручную")
     try:
         order = await repo.create_order(
-            session, user.id, data.name, data.phone, data.address, data.comment,
+            session, user.id, data.name, phone, data.address, data.comment,
             expected_total=data.expected_total,
             delivery=data.delivery,
             promo_code=data.promo_code,

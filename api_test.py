@@ -25,6 +25,7 @@ os.environ["CURRENCY"] = "USD"
 from api.auth import (  # noqa: E402
     InitDataError,
     init_data_from_header,
+    parse_contact,
     parse_init_data,
 )
 
@@ -145,6 +146,64 @@ for bad, label in [
         check(f"отклонён: {label}", True)
     else:
         check(f"отклонён: {label}", False, "заголовок принят")
+
+
+print("\n[5a] Номер из requestContact")
+
+
+def make_contact(token: str = TOKEN, *, user_id: int = 555000111,
+                 phone: str | None = "79991234567", age: int = 0,
+                 contact: str | None = None) -> str:
+    """Ответ WebApp.requestContact: та же подпись, что у initData, поле contact."""
+    body = {"user_id": user_id, "first_name": "Test"}
+    if phone is not None:
+        body["phone_number"] = phone
+    fields = {
+        "contact": contact if contact is not None
+        else json.dumps(body, separators=(",", ":")),
+        "auth_date": str(int(time.time()) - age),
+    }
+    check_string = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+    secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+    fields["hash"] = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+    return urlencode(fields)
+
+
+def contact_rejects(label: str, raw: str, *, user_id: int = 555000111, why: str) -> None:
+    try:
+        phone = parse_contact(raw, user_id=user_id)
+    except InitDataError as exc:
+        check(label, why in str(exc), f"отклонено, но по другой причине: {exc}")
+    else:
+        check(label, False, f"номер принят: {phone}")
+
+
+check("честный номер принят, плюс дописан",
+      parse_contact(make_contact(), user_id=555000111) == "+79991234567")
+check("номер с плюсом не удваивается",
+      parse_contact(make_contact(phone="+79991234567"), user_id=555000111) == "+79991234567")
+contact_rejects("номер, подписанный чужим ботом", make_contact("999:OTHER"), why="подпись не сошлась")
+contact_rejects("подменённый номер при живой подписи",
+                make_contact().replace("79991234567", "70000000000"), why="подпись не сошлась")
+contact_rejects("чужой номер из-под своей учётки", make_contact(user_id=555000222),
+                why="другому пользователю")
+contact_rejects("номер старше часа", make_contact(age=7200), why="протух")
+contact_rejects("contact без номера", make_contact(phone=None), why="нет номера")
+contact_rejects("номер из пробелов", make_contact(phone="   "), why="нет номера")
+contact_rejects("contact не JSON", make_contact(contact="не-json"), why="не разбирается")
+contact_rejects("contact — список", make_contact(contact="[1,2]"), why="не объект")
+# initData — тоже подписанная строка, но номера в ней нет: подсунуть её вместо
+# контакта не должно получиться.
+contact_rejects("initData вместо контакта", make_init_data(), why="не разбирается")
+# Враждебный проход 20.10: оба проходили. 555000111.0 == 555000111 в Python,
+# а дубли ключей молча схлопывались в последнее значение.
+contact_rejects("user_id дробным числом", make_contact(user_id=555000111.0),
+                why="другому пользователю")
+contact_rejects("user_id строкой", make_contact(user_id="555000111"), why="другому пользователю")
+contact_rejects("две подписанные строки склеены", make_contact() + "&" + make_contact(),
+                why="повторяется")
+rejects("initData с повтором ключа", raw + "&" + raw, why="повторяется")
+rejects("id пользователя булевым", make_init_data(with_user=False, user='{"id":true}'), why="числового id")
 
 
 # ---------------------------------------------------------------- эндпоинты
@@ -439,7 +498,47 @@ async def consultant() -> None:
             await c.delete("/api/cart", headers=headers(buyer))
 
 
+async def contact_order() -> None:
+    """Заказ с номером из Telegram: телефон берётся из подписи, а не из поля."""
+    print("\n[10a] Заказ с номером из requestContact")
+    transport = httpx.ASGITransport(app=create_test_app())
+    buyer = make_init_data()
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        catalog = (await c.get("/api/catalog")).json()
+        product = next(p for cat in catalog["categories"] for p in cat["products"] if p["stock"] != 0)
+
+        async def order_with(contact: str, phone: str = "+1 000 000 00 00"):
+            await c.delete("/api/cart", headers=headers(buyer))
+            cart = (await c.post("/api/cart", headers=headers(buyer),
+                                 json={"product_id": product["id"], "delta": 1})).json()
+            return await c.post("/api/order", headers=headers(buyer), json={
+                "name": "Test Buyer", "phone": phone, "address": "Berlin, Alexanderplatz 1",
+                "expected_total": cart["total"], "contact": contact})
+
+        r = await order_with(make_contact())
+        check("заказ с подписанным номером — 200", r.status_code == 200, r.text[:160])
+        async with session_factory() as s:
+            saved = await repo.order(s, r.json()["id"])
+        check("в заказе номер из подписи, а не из поля",
+              saved.contact_phone == "+79991234567", saved.contact_phone)
+
+        for label, raw in [("чужой номер", make_contact(user_id=555000222)),
+                           ("подделка подписи", make_contact("999:OTHER")),
+                           ("протухший номер", make_contact(age=7200))]:
+            r = await order_with(raw)
+            check(f"{label} — 400, а не тихий заказ с полем phone",
+                  r.status_code == 400 and "вручную" in r.json()["detail"], f"{r.status_code} {r.text[:120]}")
+        r = await c.get("/api/cart", headers=headers(buyer))
+        check("после отказа корзина цела", len(r.json()["lines"]) == 1, r.text[:120])
+
+        r = await order_with("x" * 3000)
+        check("гигантский contact — 422", r.status_code == 422, f"код {r.status_code}")
+        r = await order_with("", phone="+7 912 000 00 00")
+        check("без contact — ручной номер как раньше", r.status_code == 200, r.text[:160])
+
+
 asyncio.run(endpoints())
+asyncio.run(contact_order())
 asyncio.run(healthcheck())
 asyncio.run(seed_art())
 asyncio.run(consultant())
