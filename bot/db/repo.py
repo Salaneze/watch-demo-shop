@@ -708,6 +708,99 @@ async def repeat_order(s: AsyncSession, user_id: int, order_id: int) -> tuple[li
     return added, skipped
 
 
+# ---------- «с этим берут» ----------
+
+# Один общий заказ — совпадение, два — уже повадка. Без порога первый же
+# покупатель с двумя случайными товарами навсегда связал бы их в витрине.
+MIN_PAIR_ORDERS = 2
+# Категория-аксессуар в запасном подборе: весь её ассортимент не дороже трети
+# самого дешёвого товара в категории основного — ремешки к часам, чехлы к
+# телефонам. Дороже — это уже вторая покупка, а не дополнение. Порог на глаз,
+# по живым заказам его стоит подвинуть.
+# TODO: магазину с нестандартной ценовой лестницей нужен ручной флаг
+# «аксессуар» у категории — эвристика угадывает, а не знает.
+ADDON_MAX_SHARE = 0.34
+
+
+def _buyable():
+    # Скрытая категория прячет товар из каталога — предлагать его отсюда тоже нельзя.
+    return (Product.is_active, Product.stock != 0,
+            Product.category_id.in_(select(Category.id).where(Category.is_active)))
+
+
+async def related_products(
+    s: AsyncSession, product_ids: set[int], *, exclude: set[int] | None = None, limit: int = 3,
+) -> tuple[list[Product], bool]:
+    """Что предложить рядом с товарами. → (товары, взяты ли из истории заказов).
+
+    Сначала честная статистика: что лежало в одних заказах с этими товарами,
+    отменённые не считаем. Нет данных — запасной ход для любого ассортимента:
+    товары из другой категории, чем самый дорогой из исходных, и не дороже
+    трети самого дешёвого товара его категории. Это и есть аксессуары: к часам ремешок, к телефону чехол.
+    Обратное (к ремешку часы)
+    было бы не допродажей, а попыткой продать вместо.
+
+    Флаг нужен витрине для заголовка: «С этим берут» без заказов за спиной —
+    враньё, а запасной список подписывается иначе.
+    """
+    if not product_ids:
+        return [], False
+    skip = set(product_ids) | set(exclude or ())
+
+    together = (
+        select(OrderItem.order_id)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.product_id.in_(product_ids), Order.status != OrderStatus.cancelled)
+    )
+    n = func.count(func.distinct(OrderItem.order_id))
+    rows = await s.execute(
+        select(OrderItem.product_id, n)
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(OrderItem.order_id.in_(together), OrderItem.product_id.not_in(skip),
+               Order.status != OrderStatus.cancelled)
+        .group_by(OrderItem.product_id)
+        .having(n >= MIN_PAIR_ORDERS)
+        .order_by(n.desc(), OrderItem.product_id)
+    )
+    rank = [pid for pid, _count in rows]
+    if rank:
+        alive = {p.id: p for p in await s.scalars(
+            select(Product).where(Product.id.in_(rank), *_buyable()))}
+        found = [alive[pid] for pid in rank if pid in alive][:limit]
+        if found:
+            return found, True
+
+    base = list(await s.scalars(select(Product).where(Product.id.in_(product_ids))))
+    if not base:
+        return [], False
+    # Опорный товар — самый дорогой. Первая версия исключала категории всех
+    # товаров корзины и сравнивала просто «дешевле»: к часам с ремешком витрина
+    # предлагала ещё трое кварцевых часов.
+    main = max(base, key=lambda p: p.price)
+    # Решаем по категории целиком, а не по цене товара: порог «треть от
+    # часов за 670» пропускал кварц за 120, то есть те же часы, только другие.
+    # Категория — аксессуар, если даже её самый дорогой товар не дороже трети
+    # самого дешёвого в категории основного.
+    floor = await s.scalar(
+        select(func.min(Product.price)).where(Product.category_id == main.category_id, Product.is_active)
+    ) or main.price
+    ceilings = await s.execute(
+        select(Product.category_id, func.max(Product.price))
+        .where(Product.is_active, Product.category_id != main.category_id)
+        .group_by(Product.category_id)
+    )
+    addon_cats = {cid for cid, top in ceilings if top <= floor * ADDON_MAX_SHARE}
+    if not addon_cats:
+        return [], False
+    res = await s.scalars(
+        select(Product)
+        .where(*_buyable(), Product.id.not_in(skip), Product.category_id.in_(addon_cats))
+        .order_by(Product.price, Product.id)
+        .limit(limit)
+    )
+    return list(res), False
+
+
 # ---------- admin: catalog edit ----------
 
 async def add_promo(s: AsyncSession, code: str, percent: int, max_uses: int = -1) -> Promo:

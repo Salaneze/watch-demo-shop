@@ -37,6 +37,7 @@ from api.schemas import (
     ProductOut,
     PromoIn,
     PromoOut,
+    RelatedOut,
     RepeatOut,
     ReviewIn,
     ReviewOut,
@@ -569,6 +570,26 @@ async def repeat_order(order_id: int, user: CurrentUser, session: Session) -> Re
     except LookupError:
         raise HTTPException(status_code=404, detail="Заказ не найден")
     return RepeatOut(cart=await _cart_out(session, user.id, []), added=added, skipped=skipped)
+
+
+@router.get("/products/{product_id}/related", response_model=RelatedOut)
+async def product_related(product_id: int, session: Session) -> RelatedOut:
+    product = await repo.product(session, product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    found, from_orders = await repo.related_products(session, {product_id})
+    stats = await repo.rating_stats(session)
+    return RelatedOut(from_orders=from_orders, products=[_product_out(p, stats=stats) for p in found])
+
+
+@router.get("/cart/related", response_model=RelatedOut)
+async def cart_related(user: CurrentUser, session: Session) -> RelatedOut:
+    """Допродажа в корзине, а не после оформления: там лишний товар — ещё одна
+    строчка, а на экране «заказ принят» — второй заказ, вторая доставка и чек."""
+    ids = {i.product_id for i in await repo.cart_items(session, user.id)}
+    found, from_orders = await repo.related_products(session, ids)
+    stats = await repo.rating_stats(session)
+    return RelatedOut(from_orders=from_orders, products=[_product_out(p, stats=stats) for p in found])
 
 
 # ---------- ИИ-консультант ----------

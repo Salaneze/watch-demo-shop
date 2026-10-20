@@ -207,6 +207,13 @@ class ReviewIn(BaseModel):
     text: str = Field(default="", max_length=1000)
 
 
+class RelatedOut(BaseModel):
+    # true — список из реальных заказов («С этим берут»), false — запасной
+    # подбор по категориям и цене, и витрина подписывает его по-другому.
+    from_orders: bool
+    products: list[ProductOut]
+
+
 class RepeatOut(BaseModel):
     cart: CartOut
     added: list[str]

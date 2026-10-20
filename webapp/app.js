@@ -33,6 +33,7 @@ const state = {
   authorized: false,
   ai: { enabled: false, open: false, messages: [], busy: false },  // консультант; история только на экране
   reviews: {},                // id товара -> отзывы; undefined — ещё не грузили
+  related: {},                // 'p<id>' | 'cart' -> { from_orders, products } или 'loading'
   reviewForm: null,           // { order_id, product_id, rating, text } — открытая форма в заказах
   notice: '',                 // нейтральное сообщение над экраном (не ошибка)
 };
@@ -217,6 +218,9 @@ function go(screen) {
   state.screen = screen;
   state.error = '';
   state.notice = '';
+  if (screen === 'cart' && state.authorized && state.cart?.lines?.length) {
+    loadRelated('cart', '/cart/related');
+  }
   haptic();
   render();
   window.scrollTo(0, 0);
@@ -488,6 +492,49 @@ function openProduct(p) {
   state.gallery = 0;
   go('product');
   loadReviews(p.id);
+  loadRelated(`p${p.id}`, `/products/${p.id}/related`);
+}
+
+/* Подборка грузится отдельно от экрана и при сбое просто не показывается:
+   допродажа не должна мешать купить то, за чем пришли. */
+async function loadRelated(key, path) {
+  state.related[key] = 'loading';
+  try {
+    state.related[key] = await api(path);
+  } catch {
+    state.related[key] = { from_orders: false, products: [] };
+  }
+  render();
+}
+
+function relatedBlock(key, fallbackTitle) {
+  const data = state.related[key];
+  if (!data || data === 'loading' || !data.products.length) return null;
+  const inCart = new Set((state.cart?.lines || []).map(l => l.product_id));
+  return el('div', { class: 'related' }, [
+    el('div', { class: 'section-title section-title--inner', text: data.from_orders ? 'С этим берут' : fallbackTitle }),
+    el('div', { class: 'related-row' }, data.products.map(p => el('div', { class: 'related-card' }, [
+      el('div', { class: 'related-open', onclick: () => openProduct(p) }, [
+        thumb(p.image, 'related-thumb'),
+        el('div', { class: 'related-title', text: p.title }),
+        el('div', { class: 'related-price', text: p.price_text }),
+      ]),
+      state.authorized
+        ? el('button', {
+            class: `chip related-add${inCart.has(p.id) ? ' chip--on' : ''}`,
+            text: inCart.has(p.id) ? 'В корзине' : '+ В корзину',
+            disabled: inCart.has(p.id) ? 'disabled' : null,
+            onclick: () => addRelated(p.id),
+          })
+        : null,
+    ]))),
+  ]);
+}
+
+async function addRelated(productId) {
+  await patchCart(productId, 1);
+  // Корзина изменилась — подборка к ней тоже: добавленное в ней больше не нужно.
+  if (state.screen === 'cart') loadRelated('cart', '/cart/related');
 }
 
 async function loadReviews(productId) {
@@ -585,6 +632,7 @@ function screenProduct() {
       inlineAdd,
       p.description ? el('p', { text: p.description }) : null,
       specs,
+      relatedBlock(`p${p.id}`, 'Дополнит покупку'),
       reviewsBlock(p),
       el('div', { class: 'fineprint' }, [
         el('div', { text: 'Доставка по стране 2–5 дней · гарантия 24 месяца' }),
@@ -666,6 +714,7 @@ function screenCart() {
       el('span', { text: cart.total_text }),
     ]),
     cartDeliverySums(cart.total),
+    relatedBlock('cart', 'Добавить к заказу'),
     el('div', { class: 'cart-actions' }, [
       el('button', { class: 'chip chip--danger', text: '🗑 Очистить корзину', onclick: clearCart }),
     ]),
