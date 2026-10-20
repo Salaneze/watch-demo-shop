@@ -11,7 +11,7 @@ from bot.config import settings
 from bot.db.base import init_db, session_factory
 from bot.handlers import setup_routers
 from bot.middlewares.db import DbSessionMiddleware
-from bot.utils.seed import seed_if_empty
+from bot.utils.seed import seed_demo_reviews, seed_if_empty
 from bot.utils.notify import check_admins
 from bot.utils.sweeper import start_sweeper
 
@@ -29,6 +29,8 @@ async def main() -> None:
     async with session_factory() as session:
         if await seed_if_empty(session):
             log.info("Каталог был пуст — залил демо-товары")
+        if n := await seed_demo_reviews(session):
+            log.info("Залил демо-отзывы: %s", n)
 
     bot = Bot(
         token=settings.bot_token,

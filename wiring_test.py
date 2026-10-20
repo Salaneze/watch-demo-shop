@@ -69,7 +69,8 @@ dp.include_router(root)
 names = [r.name for r in root.sub_routers]
 # ai — последним намеренно: в диалоге с консультантом кнопки меню должны
 # перехватываться роутерами выше.
-check("все роутеры подключены", names == ["common", "catalog", "cart", "checkout", "admin", "ai"], names)
+check("все роутеры подключены",
+      names == ["common", "catalog", "cart", "checkout", "admin", "reviews", "ai"], names)
 
 counts = {r.name: (len(r.message.handlers), len(r.callback_query.handlers)) for r in root.sub_routers}
 for name, (m, c) in counts.items():

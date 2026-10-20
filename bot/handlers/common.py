@@ -9,6 +9,7 @@ from api.session import store as login_store
 from bot.config import settings
 from bot.db import repo
 from bot.db.models import status_ru
+from bot.handlers.cart import render_cart
 from bot.keyboards.callbacks import CustomerOrderCB, LoginCB
 from bot.keyboards.common import customer_order_kb, login_confirm_kb, main_menu
 from bot.utils.lifecycle import CUSTOMER_CANCEL_NOTE, InvalidTransition, apply_transition
@@ -173,6 +174,20 @@ async def order_cancel(
         reply_markup=customer_order_kb(order),
     )
     await notify_admins_order_cancelled(bot, order, source="чат", session=session)
+
+
+@router.callback_query(CustomerOrderCB.filter(F.action == "repeat"))
+async def order_repeat(call: CallbackQuery, callback_data: CustomerOrderCB, session: AsyncSession) -> None:
+    try:
+        added, skipped = await repo.repeat_order(session, call.from_user.id, callback_data.order_id)
+    except LookupError:
+        await call.answer("Заказ не найден", show_alert=True)
+        return
+    await call.answer("Положил в корзину" if added else "Ничего не вышло положить")
+    text, kb = await render_cart(session, call.from_user.id)
+    if skipped:
+        text = "⚠️ Уже не продаётся или кончилось: " + ", ".join(esc(t) for t in skipped) + "\n\n" + text
+    await call.message.answer(text, reply_markup=kb)
 
 
 @router.callback_query(F.data == "noop")

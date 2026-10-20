@@ -37,6 +37,9 @@ from api.schemas import (
     ProductOut,
     PromoIn,
     PromoOut,
+    RepeatOut,
+    ReviewIn,
+    ReviewOut,
     StatusEntryOut,
 )
 from api.session import deep_link, issue_token, read_token
@@ -61,6 +64,7 @@ from bot.utils.lifecycle import (
     is_final,
 )
 from bot.utils.money import fmt
+from bot.utils.reviews import notify_admins_review
 from bot.utils.seed import seed_art_path
 
 router = APIRouter(prefix="/api")
@@ -149,7 +153,9 @@ def _image_urls(p: Product) -> list[str]:
     return urls
 
 
-def _product_out(p: Product, favorites: set[int] | None = None) -> ProductOut:
+def _product_out(p: Product, favorites: set[int] | None = None,
+                 stats: dict[int, tuple[float, int]] | None = None) -> ProductOut:
+    rating, count = (stats or {}).get(p.id, (None, 0))
     return ProductOut(
         id=p.id,
         title=p.title,
@@ -164,6 +170,8 @@ def _product_out(p: Product, favorites: set[int] | None = None) -> ProductOut:
         # карточка тогда обходится без таблицы, а не падает.
         specs=[[str(k), str(v)] for k, v in (p.specs or [])],
         is_favorite=bool(favorites and p.id in favorites),
+        rating=rating,
+        reviews_count=count,
     )
 
 
@@ -209,13 +217,14 @@ async def catalog(session: Session, q: str = "", sort: str = repo.DEFAULT_SORT) 
         raise HTTPException(status_code=400, detail="Неизвестная сортировка")
 
     categories = await repo.active_categories(session)
+    stats = await repo.rating_stats(session)
     out = []
     for c in categories:
         products = await repo.products_in_category(session, c.id, query=q, sort=sort)
         if not products and q:
             continue
         out.append(
-            CategoryOut(id=c.id, title=c.title, products=[_product_out(p) for p in products])
+            CategoryOut(id=c.id, title=c.title, products=[_product_out(p, stats=stats) for p in products])
         )
     return CatalogOut(currency=settings.currency.upper(), categories=out)
 
@@ -235,7 +244,8 @@ async def favorites(user: CurrentUser, session: Session) -> list[ProductOut]:
     products = [await repo.product(session, pid) for pid in sorted(ids)]
     # Товар мог быть снят с продажи, пока лежал в отложенных: показываем только живые,
     # но запись не удаляем — вернут в продажу, и сердечко останется на месте.
-    return [_product_out(p, ids) for p in products if p is not None and p.is_active]
+    stats = await repo.rating_stats(session)
+    return [_product_out(p, ids, stats) for p in products if p is not None and p.is_active]
 
 
 @router.post("/favorites", response_model=FavoriteOut)
@@ -268,6 +278,9 @@ async def check_promo(patch: PromoIn, user: CurrentUser, session: Session) -> Pr
 
 async def _cart_out(session: AsyncSession, user_id: int, removed: list[str]) -> CartOut:
     items = await repo.cart_items(session, user_id)
+    # Звёзды рядом с позицией — последний довод перед оформлением: сомневающийся
+    # в корзине чаще всего сомневается в самом товаре.
+    stats = await repo.rating_stats(session)
     lines = [
         CartLine(
             product_id=i.product_id,
@@ -277,6 +290,8 @@ async def _cart_out(session: AsyncSession, user_id: int, removed: list[str]) -> 
             sum=i.product.price * i.qty,
             sum_text=fmt(i.product.price * i.qty),
             image=_image_url(i.product),
+            rating=stats.get(i.product_id, (None, 0))[0],
+            reviews_count=stats.get(i.product_id, (None, 0))[1],
         )
         for i in items
     ]
@@ -319,7 +334,7 @@ def iso_utc(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def _order_out(order, history=None) -> OrderOut:
+def _order_out(order, history=None, ratings: dict[int, int] | None = None) -> OrderOut:
     # Заказы, оформленные до появления доставки, лежат в базе без разбивки:
     # items_total у них 0, поэтому за сумму товаров берём общий итог.
     items_total = order.items_total or order.total
@@ -335,6 +350,7 @@ def _order_out(order, history=None) -> OrderOut:
         status=str(order.status),
         status_text=status_ru(order.status),
         can_cancel=str(order.status) in CUSTOMER_MAY_CANCEL_FROM,
+        can_review=str(order.status) == repo.REVIEWABLE_STATUS,
         is_final=is_final(order.status),
         history=[
             StatusEntryOut(
@@ -355,7 +371,9 @@ def _order_out(order, history=None) -> OrderOut:
         total_text=fmt(order.total),
         created_at=iso_utc(order.created_at),
         items=[
-            OrderItemOut(title=i.title, price=i.price, qty=i.qty) for i in order.items
+            OrderItemOut(product_id=i.product_id, title=i.title, price=i.price, qty=i.qty,
+                         my_rating=(ratings or {}).get(i.product_id))
+            for i in order.items
         ],
     )
 
@@ -400,7 +418,8 @@ async def create_order(data: OrderIn, request: Request, user: CurrentUser,
 @router.get("/orders", response_model=list[OrderOut])
 async def my_orders(user: CurrentUser, session: Session) -> list[OrderOut]:
     orders = await repo.orders_by_user(session, user.id, limit=10)
-    return [_order_out(o) for o in orders]
+    ratings = await repo.user_ratings(session, user.id)
+    return [_order_out(o, ratings=ratings) for o in orders]
 
 
 async def _own_order(session: AsyncSession, user_id: int, order_id: int):
@@ -415,7 +434,8 @@ async def _own_order(session: AsyncSession, user_id: int, order_id: int):
 @router.get("/orders/{order_id}", response_model=OrderOut)
 async def my_order(order_id: int, user: CurrentUser, session: Session) -> OrderOut:
     order = await _own_order(session, user.id, order_id)
-    return _order_out(order, await repo.history_for(session, order.id))
+    return _order_out(order, await repo.history_for(session, order.id),
+                      await repo.user_ratings(session, user.id))
 
 
 @router.post("/orders/{order_id}/cancel", response_model=OrderOut)
@@ -476,7 +496,10 @@ async def product_image(product_id: int, request: Request, session: Session,
     if art is not None:
         return FileResponse(art, media_type="image/png",
                             headers={"Cache-Control": "public, max-age=86400"})
+    return await _telegram_image(request, file_id)
 
+
+async def _telegram_image(request: Request, file_id: str) -> FileResponse:
     MEDIA_DIR.mkdir(exist_ok=True)
     # Имя от file_id: сменили фото товара — старый кэш не подсунется.
     name = hashlib.sha1(file_id.encode()).hexdigest()[:16] + ".jpg"
@@ -491,6 +514,61 @@ async def product_image(product_id: int, request: Request, session: Session,
 
     return FileResponse(path, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ---------- отзывы и повтор заказа ----------
+
+def _review_out(r) -> ReviewOut:
+    return ReviewOut(
+        id=r.id, author=r.author or "Покупатель", rating=r.rating, text=r.text,
+        photo=f"/api/review-img/{r.id}" if r.photo_file_id else None,
+        created_at=iso_utc(r.created_at), is_demo=r.is_demo,
+    )
+
+
+@router.get("/products/{product_id}/reviews", response_model=list[ReviewOut])
+async def product_reviews(product_id: int, session: Session) -> list[ReviewOut]:
+    """Открыто без подписи, как и каталог: отзывы и так видит каждый в карточке."""
+    product = await repo.product(session, product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    return [_review_out(r) for r in await repo.product_reviews(session, product_id)]
+
+
+@router.get("/review-img/{review_id}")
+async def review_image(review_id: int, request: Request, session: Session) -> FileResponse:
+    r = await repo.review(session, review_id)
+    # Скрытый отзыв закрывается вместе с фото: прятать текст и оставлять
+    # снимок по прямой ссылке — модерация наполовину.
+    if r is None or r.is_hidden or not r.photo_file_id:
+        raise HTTPException(status_code=404, detail="Нет картинки")
+    return await _telegram_image(request, r.photo_file_id)
+
+
+@router.post("/reviews", response_model=ReviewOut)
+async def leave_review(data: ReviewIn, request: Request, user: CurrentUser,
+                       session: Session) -> ReviewOut:
+    try:
+        review = await repo.add_review(
+            session, user.id, data.order_id, data.product_id, data.rating,
+            text=data.text, author=repo.public_name(user.full_name),
+        )
+    except repo.ReviewDenied as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    bot = getattr(request.app.state, "bot", None)
+    # Админу — только то, что есть что модерировать: одни звёзды он не скроет.
+    if bot is not None and review.text:
+        await notify_admins_review(bot, session, review)
+    return _review_out(review)
+
+
+@router.post("/orders/{order_id}/repeat", response_model=RepeatOut)
+async def repeat_order(order_id: int, user: CurrentUser, session: Session) -> RepeatOut:
+    try:
+        added, skipped = await repo.repeat_order(session, user.id, order_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Заказ не найден")
+    return RepeatOut(cart=await _cart_out(session, user.id, []), added=added, skipped=skipped)
 
 
 # ---------- ИИ-консультант ----------

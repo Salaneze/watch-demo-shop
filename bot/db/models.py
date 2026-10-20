@@ -234,3 +234,44 @@ class AdminOrderMessage(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
     chat_id: Mapped[int] = mapped_column(BigInteger)
     message_id: Mapped[int] = mapped_column(Integer)
+
+
+class Review(Base):
+    """Отзыв покупателя о товаре.
+
+    Оставить можно только по своему выданному заказу — это проверяет
+    repo.add_review, поэтому order_id лежит рядом: «купил и написал» видно из
+    базы, а не со слов. Исключение — демо-отзывы витрины (is_demo, без заказа,
+    user_id отрицательный): их засевает seed, и витрина помечает их как демо.
+
+    На пару «человек + товар» один отзыв: купил второй раз и написал снова —
+    правится старый. Иначе один довольный покупатель делает товару рейтинг.
+    """
+
+    __tablename__ = "reviews"
+    __table_args__ = (UniqueConstraint("user_id", "product_id", name="uq_review_user_product"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"), nullable=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    author: Mapped[str] = mapped_column(String(64), default="")  # имя на момент отзыва
+    rating: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text, default="")
+    photo_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_demo: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ReviewAsk(Base):
+    """Заказы, по которым бот уже попросил отзыв. Есть строка — больше не просим.
+
+    Отдельная таблица, а не флаг в orders: create_all не добавляет колонки в
+    существующую таблицу, а orders в проде уже живёт в Postgres.
+    """
+
+    __tablename__ = "review_asks"
+
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

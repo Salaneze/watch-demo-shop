@@ -31,7 +31,19 @@ class AdminOrderCB(CallbackData, prefix="aord"):
 
 class CustomerOrderCB(CallbackData, prefix="cord"):
     order_id: int
-    action: str  # history | cancel
+    action: str  # history | cancel | repeat
+
+
+class ReviewCB(CallbackData, prefix="rev"):
+    action: str       # start | pick | rate | skip
+    order_id: int
+    product_id: int = 0
+    rating: int = 0
+
+
+class ReviewAdminCB(CallbackData, prefix="arev"):
+    review_id: int
+    hide: bool
 
 
 class LoginCB(CallbackData, prefix="wal"):

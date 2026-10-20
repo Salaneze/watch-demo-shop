@@ -31,6 +31,12 @@ class AdminOrderInput(StatesGroup):
     cancel_reason = State()
 
 
+class ReviewForm(StatesGroup):
+    # Звёзды уже сохранены по кнопке, здесь ждём текст или фото. В state.data
+    # order_id и product_id: проверка заказа повторяется при сохранении текста.
+    text = State()
+
+
 class AiChat(StatesGroup):
     # Пока клиент в этом состоянии, любой текст уходит модели, а не в поиск
     # по каталогу. Кнопки меню продолжают работать: их фильтры стоят раньше.

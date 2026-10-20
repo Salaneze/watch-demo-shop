@@ -8,7 +8,7 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import settings
-from bot.db.models import CartItem, Category, Order, Product
+from bot.db.models import CartItem, Category, Order, OrderItem, Product, Review
 from bot.keyboards.callbacks import (
     AdminOrderCB,
     CartCB,
@@ -17,9 +17,11 @@ from bot.keyboards.callbacks import (
     LoginCB,
     NavCB,
     ProductCB,
+    ReviewAdminCB,
+    ReviewCB,
 )
 from bot.utils.delivery import DELIVERY_OPTIONS
-from bot.utils.lifecycle import CUSTOMER_MAY_CANCEL_FROM, allowed_next
+from bot.utils.lifecycle import CUSTOMER_MAY_CANCEL_FROM, allowed_next, is_final
 from bot.utils.money import fmt
 
 
@@ -175,5 +177,60 @@ def customer_order_kb(order: Order) -> InlineKeyboardMarkup:
     kb.button(text="🕓 История", callback_data=CustomerOrderCB(order_id=order.id, action="history"))
     if str(order.status) in CUSTOMER_MAY_CANCEL_FROM:
         kb.button(text="❌ Отменить", callback_data=CustomerOrderCB(order_id=order.id, action="cancel"))
+    if str(order.status) == "delivered":
+        kb.button(text="⭐ Оценить", callback_data=ReviewCB(action="start", order_id=order.id))
+    # Повтор — только у закрытых: живой заказ ещё едет, второй такой же
+    # обычно оформляют по ошибке.
+    if is_final(order.status):
+        kb.button(text="🔁 Повторить", callback_data=CustomerOrderCB(order_id=order.id, action="repeat"))
     kb.adjust(2)
+    return kb.as_markup()
+
+
+def delivered_kb(order: Order) -> InlineKeyboardMarkup:
+    """Под сообщением «заказ выдан»: просьба оценить, пока покупка свежая."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⭐ Оценить покупку", callback_data=ReviewCB(action="start", order_id=order.id))
+    kb.button(text="🔁 Повторить заказ", callback_data=CustomerOrderCB(order_id=order.id, action="repeat"))
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def review_pick_kb(order_id: int, items: list[OrderItem], rated: dict[int, int]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for i in items:
+        mark = f" · ваша {'★' * rated[i.product_id]}" if i.product_id in rated else ""
+        kb.button(
+            text=f"{i.title[:40]}{mark}",
+            callback_data=ReviewCB(action="pick", order_id=order_id, product_id=i.product_id),
+        )
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def review_stars_kb(order_id: int, product_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for n in range(5, 0, -1):
+        kb.button(
+            text="★" * n,
+            callback_data=ReviewCB(action="rate", order_id=order_id, product_id=product_id, rating=n),
+        )
+    # Пять кнопок в ряд на телефоне обрезаются до «★…», столбиком читается.
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def review_skip_kb(order_id: int, product_id: int) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="Без текста, только оценка",
+              callback_data=ReviewCB(action="skip", order_id=order_id, product_id=product_id))
+    return kb.as_markup()
+
+
+def admin_review_kb(review: Review) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if review.is_hidden:
+        kb.button(text="👁 Вернуть на витрину", callback_data=ReviewAdminCB(review_id=review.id, hide=False))
+    else:
+        kb.button(text="🙈 Скрыть", callback_data=ReviewAdminCB(review_id=review.id, hide=True))
     return kb.as_markup()

@@ -27,6 +27,9 @@ class ProductOut(BaseModel):
     stock: int
     specs: list[list[str]]
     is_favorite: bool = False
+    # None — оценок нет; витрина тогда не рисует звёзды вовсе, а не «0.0».
+    rating: float | None = None
+    reviews_count: int = 0
 
 
 class CategoryOut(BaseModel):
@@ -105,6 +108,8 @@ class CartLine(BaseModel):
     sum: int
     sum_text: str
     image: str | None
+    rating: float | None = None
+    reviews_count: int = 0
 
 
 class CartOut(BaseModel):
@@ -175,9 +180,37 @@ class OrderIn(BaseModel):
 
 
 class OrderItemOut(BaseModel):
+    product_id: int = 0
     title: str
     price: int
     qty: int
+    # Оценка, которую этот покупатель уже поставил товару; None — ещё не оценивал.
+    my_rating: int | None = None
+
+
+class ReviewOut(BaseModel):
+    """Отзыв в карточке. Ни user_id, ни order_id наружу: по ним чужие отзывы
+    склеивались бы в историю покупок конкретного человека."""
+    id: int
+    author: str
+    rating: int
+    text: str
+    photo: str | None
+    created_at: str
+    is_demo: bool
+
+
+class ReviewIn(BaseModel):
+    order_id: int
+    product_id: int
+    rating: int = Field(ge=1, le=5, strict=True)
+    text: str = Field(default="", max_length=1000)
+
+
+class RepeatOut(BaseModel):
+    cart: CartOut
+    added: list[str]
+    skipped: list[str]
 
 
 class StatusEntryOut(BaseModel):
@@ -196,6 +229,7 @@ class OrderOut(BaseModel):
     status_text: str
     # Витрина не знает схему переходов — сервер говорит, что можно показать.
     can_cancel: bool = False
+    can_review: bool = False
     is_final: bool = False
     history: list[StatusEntryOut] = []
     items_total: int

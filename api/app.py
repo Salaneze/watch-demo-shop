@@ -44,7 +44,7 @@ from bot.utils.notify import (
 )
 from bot.utils.keepalive import start_keepalive
 from bot.utils.sweeper import start_sweeper
-from bot.utils.seed import seed_if_empty
+from bot.utils.seed import seed_demo_reviews, seed_if_empty
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +97,8 @@ async def lifespan(app: FastAPI):
     async with session_factory() as session:
         if await seed_if_empty(session):
             log.info("Каталог был пуст — залил демо-товары")
+        if n := await seed_demo_reviews(session):
+            log.info("Залил демо-отзывы: %s", n)
 
     bot = Bot(
         token=settings.bot_token,

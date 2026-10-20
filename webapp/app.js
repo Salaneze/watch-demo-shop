@@ -32,6 +32,9 @@ const state = {
   session: '',                // сессия для клиентов без initData
   authorized: false,
   ai: { enabled: false, open: false, messages: [], busy: false },  // консультант; история только на экране
+  reviews: {},                // id товара -> отзывы; undefined — ещё не грузили
+  reviewForm: null,           // { order_id, product_id, rating, text } — открытая форма в заказах
+  notice: '',                 // нейтральное сообщение над экраном (не ошибка)
 };
 
 /* ---------- мелкие помощники ---------- */
@@ -65,6 +68,24 @@ function thumb(url, cls) {
   return url
     ? el('img', { class: cls, src: url, loading: 'lazy', alt: '' })
     : el('div', { class: `${cls} thumb--empty`, text: '⌚' });
+}
+
+/* «★ 4.6 · 12» — без оценок ничего: пустые звёзды на новинке читаются как
+   «товар плохой», а не как «товар новый». */
+function ratingBadge(rating, count, cls = 'rating') {
+  if (!count) return null;
+  return el('div', { class: cls, text: `★ ${rating.toFixed(1)} · ${count}` });
+}
+
+function plural(n, one, few, many) {
+  const d = n % 10, h = n % 100;
+  if (d === 1 && h !== 11) return one;
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return few;
+  return many;
+}
+
+function stars(n) {
+  return '★'.repeat(n) + '☆'.repeat(5 - n);
 }
 
 /* Текст про остаток. -1 — считать штуки магазин не просил, тогда молчим:
@@ -195,6 +216,7 @@ function setSecondary(text, handler) {
 function go(screen) {
   state.screen = screen;
   state.error = '';
+  state.notice = '';
   haptic();
   render();
   window.scrollTo(0, 0);
@@ -385,12 +407,13 @@ function productCard(p) {
     }),
     el('div', {
       class: 'card',
-      onclick: () => { state.product = p; state.gallery = 0; go('product'); },
+      onclick: () => openProduct(p),
     }, [
       thumb(p.image, 'thumb'),
       el('div', { class: 'card-body' }, [
         el('div', { class: 'card-title', text: p.title }),
         el('div', { class: 'card-price', text: p.price_text }),
+        ratingBadge(p.rating, p.reviews_count, 'rating rating--card'),
         note && note.low ? el('div', { class: 'card-stock', text: note.text }) : null,
       ]),
     ]),
@@ -460,6 +483,46 @@ function gallery(p) {
   ]);
 }
 
+function openProduct(p) {
+  state.product = p;
+  state.gallery = 0;
+  go('product');
+  loadReviews(p.id);
+}
+
+async function loadReviews(productId) {
+  try {
+    state.reviews[productId] = await api(`/products/${productId}/reviews`);
+  } catch {
+    // Отзывы — не повод ломать карточку: без них она остаётся рабочей.
+    state.reviews[productId] = [];
+  }
+  if (state.screen === 'product' && state.product?.id === productId) render();
+}
+
+function reviewsBlock(p) {
+  const list = state.reviews[p.id];
+  const head = el('div', { class: 'section-title section-title--inner' }, [
+    el('span', { text: 'Отзывы' }),
+    p.reviews_count ? el('span', { class: 'rating', text: `★ ${p.rating.toFixed(1)} · ${p.reviews_count} ${plural(p.reviews_count, 'оценка', 'оценки', 'оценок')}` }) : null,
+  ]);
+  if (list === undefined) return el('div', { class: 'reviews' }, [head, el('div', { class: 'hint', text: 'Загружаю…' })]);
+  if (!list.length) {
+    return el('div', { class: 'reviews' }, [head,
+      el('div', { class: 'hint', text: 'Отзывов пока нет. Оставить отзыв можно после получения заказа.' })]);
+  }
+  return el('div', { class: 'reviews' }, [head, ...list.map(r => el('div', { class: 'review' }, [
+    el('div', { class: 'review-head' }, [
+      el('span', { class: 'review-stars', text: stars(r.rating) }),
+      el('span', { class: 'review-author', text: r.author }),
+      el('span', { class: 'review-date', text: historyTime(r.created_at).slice(0, 5) }),
+    ]),
+    r.text ? el('div', { class: 'review-text', text: r.text }) : null,
+    r.photo ? el('img', { class: 'review-photo', src: r.photo, loading: 'lazy', alt: '' }) : null,
+    r.is_demo ? el('div', { class: 'review-demo', text: 'демо-отзыв' }) : null,
+  ]))]);
+}
+
 function screenProduct() {
   const p = state.product;
   const line = (state.cart?.lines || []).find(l => l.product_id === p.id);
@@ -517,10 +580,12 @@ function screenProduct() {
     el('div', { class: 'detail' }, [
       el('h1', { text: p.title }),
       el('div', { class: 'price', text: p.price_text }),
+      ratingBadge(p.rating, p.reviews_count),
       note ? el('div', { class: `stock${note.low ? ' stock--low' : ''}`, text: note.text }) : null,
       inlineAdd,
       p.description ? el('p', { text: p.description }) : null,
       specs,
+      reviewsBlock(p),
       el('div', { class: 'fineprint' }, [
         el('div', { text: 'Доставка по стране 2–5 дней · гарантия 24 месяца' }),
         el('div', { text: 'Витрина-образец: товары вымышленные, деньги не списываются' }),
@@ -578,6 +643,7 @@ function screenCart() {
     thumb(l.image, 'thumb'),
     el('div', { class: 'row-main' }, [
       el('div', { class: 'row-title', text: l.title }),
+      ratingBadge(l.rating, l.reviews_count, 'rating rating--row'),
       el('div', { class: 'row-sum', text: l.sum_text }),
     ]),
     el('div', { class: 'stepper' }, [
@@ -596,13 +662,29 @@ function screenCart() {
       : null,
     el('div', { class: 'list' }, rows),
     el('div', { class: 'total' }, [
-      el('span', { text: 'Итого' }),
+      el('span', { text: 'Товары' }),
       el('span', { text: cart.total_text }),
     ]),
+    cartDeliverySums(cart.total),
     el('div', { class: 'cart-actions' }, [
       el('button', { class: 'chip chip--danger', text: '🗑 Очистить корзину', onclick: clearCart }),
     ]),
   ];
+}
+
+/* Сумму с доставкой показываем ещё в корзине, по каждому способу сразу:
+   доставка, впервые всплывшая на оформлении, — главная причина бросить
+   корзину (Baymard, и то же самое пишут продавцы на r/ecommerce). Способ
+   здесь не выбирается, чтобы не плодить второй выбор рядом с чекаутом. */
+function cartDeliverySums(itemsTotal) {
+  if (!state.deliveryOptions.length) return null;
+  return el('div', { class: 'sums sums--cart' }, [
+    el('div', { class: 'sums-caption', text: 'Итого с доставкой' }),
+    ...state.deliveryOptions.map(o => sumRow(
+      o.cost ? `${o.title} · +${o.cost_text}` : `${o.title} · бесплатно`,
+      formatMoneyLike(itemsTotal + o.cost),
+    )),
+  ]);
 }
 
 const FIELDS = [
@@ -855,6 +937,93 @@ function historyTime(iso) {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function reviewForm(o, item) {
+  const f = state.reviewForm;
+  // Поле текста не перерисовываем на каждый символ: на iOS новый узел
+  // закрывает клавиатуру. Ввод пишет в state, render зовут только звёзды.
+  const area = el('textarea', {
+    class: 'review-input', rows: '3', maxlength: '1000',
+    placeholder: 'Что понравилось, что нет — увидят другие покупатели',
+  });
+  area.value = f.text;
+  area.addEventListener('input', () => { f.text = area.value; });
+  return el('div', { class: 'review-form' }, [
+    el('div', { class: 'review-form-title', text: item.title }),
+    el('div', { class: 'star-pick' }, [1, 2, 3, 4, 5].map(n => el('button', {
+      class: `star${n <= f.rating ? ' star--on' : ''}`,
+      'aria-label': `${n} из 5`,
+      text: '★',
+      onclick: () => { f.rating = n; haptic(); render(); },
+    }))),
+    area,
+    el('div', { class: 'hint', text: 'Фото можно приложить в чате с ботом: кнопка «Оценить» у заказа.' }),
+    el('div', { class: 'order-actions' }, [
+      el('button', {
+        class: 'chip chip--on', text: 'Отправить', disabled: f.rating ? null : 'disabled',
+        onclick: () => sendReview(o.id, item.product_id),
+      }),
+      el('button', { class: 'chip', text: 'Отмена', onclick: () => { state.reviewForm = null; render(); } }),
+    ]),
+  ]);
+}
+
+function openReview(o, item) {
+  haptic();
+  state.reviewForm = { order_id: o.id, product_id: item.product_id, rating: item.my_rating || 0, text: '' };
+  render();
+}
+
+async function sendReview(orderId, productId) {
+  const f = state.reviewForm;
+  try {
+    await api('/reviews', {
+      method: 'POST',
+      body: JSON.stringify({ order_id: orderId, product_id: productId, rating: f.rating, text: f.text }),
+    });
+    tg?.HapticFeedback?.notificationOccurred('success');
+    state.reviewForm = null;
+    state.notice = 'Спасибо! Отзыв появился в карточке товара.';
+    // Средняя оценка в каталоге поменялась — перечитываем, как и заказы.
+    delete state.reviews[productId];
+    await Promise.all([refreshOrders(), reloadCatalog()]);
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
+async function repeatOrder(id) {
+  haptic('medium');
+  try {
+    const res = await api(`/orders/${id}/repeat`, { method: 'POST' });
+    state.cart = res.cart;
+    go('cart');
+    state.notice = res.skipped.length
+      ? `Уже не продаётся или кончилось: ${res.skipped.join(', ')}`
+      : 'Положили в корзину по сегодняшним ценам';
+  } catch (e) {
+    if (e.status === 401) { startLogin(); return; }
+    state.error = e.message;
+  }
+  render();
+}
+
+function orderItemLine(o, i) {
+  const text = `${i.title} — ${i.qty} шт`;
+  if (!o.can_review || !i.product_id) return el('div', { class: 'order-line', text });
+  const f = state.reviewForm;
+  if (f && f.order_id === o.id && f.product_id === i.product_id) return reviewForm(o, i);
+  return el('div', { class: 'order-line order-line--review' }, [
+    el('span', { text }),
+    el('button', {
+      class: 'link-btn',
+      text: i.my_rating ? `${stars(i.my_rating)} · изменить` : '★ Оценить',
+      onclick: () => openReview(o, i),
+    }),
+  ]);
+}
+
 function orderCard(o) {
   const open = state.openHistory.has(o.id);
   const history = open ? (state.histories[o.id] || []) : [];
@@ -864,7 +1033,7 @@ function orderCard(o) {
       el('span', { text: o.total_text }),
     ]),
     el('div', { class: 'order-status', text: o.status_text }),
-    ...o.items.map(i => el('div', { class: 'order-line', text: `${i.title} — ${i.qty} шт` })),
+    ...o.items.map(i => orderItemLine(o, i)),
     el('div', { class: 'order-actions' }, [
       el('button', {
         class: `chip${open ? ' chip--on' : ''}`,
@@ -875,6 +1044,11 @@ function orderCard(o) {
         class: 'chip chip--danger',
         text: 'Отменить заказ',
         onclick: () => cancelOrder(o.id),
+      }) : null,
+      o.is_final ? el('button', {
+        class: 'chip',
+        text: '🔁 Повторить',
+        onclick: () => repeatOrder(o.id),
       }) : null,
     ]),
     open ? el('div', { class: 'history' }, history.map(h =>
@@ -1039,6 +1213,7 @@ function render() {
   if (state.error) {
     app.append(el('div', { class: 'notice notice--bad', text: state.error }));
   }
+  if (state.notice) app.append(el('div', { class: 'notice', text: state.notice }));
 
   const screens = {
     catalog: screenCatalog,

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.db import repo
 from bot.db.models import Order, OrderStatusHistory, status_ru
-from bot.keyboards.common import admin_order_kb
+from bot.keyboards.common import admin_order_kb, delivered_kb
 from bot.utils.delivery import delivery_option
 from bot.utils.lifecycle import is_final
 from bot.utils.money import fmt
@@ -222,8 +222,10 @@ async def notify_customer_status(
     TODO: повторной отправки нет. Сетевой сбой на секунду помечает запись как
     «не уведомлён» навсегда; если такое начнёт случаться, нужна очередь с backoff.
     """
+    # «Выдан» — лучший момент попросить оценку: покупка в руках, чат открыт.
+    markup = delivered_kb(order) if str(entry.status) == "delivered" else None
     try:
-        await bot.send_message(order.user_id, status_message(order, entry))
+        await bot.send_message(order.user_id, status_message(order, entry), reply_markup=markup)
         return True
     except Exception as e:
         log.warning("Не смог уведомить покупателя %s о заказе #%s: %s", order.user_id, order.id, e)

@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.config import settings
 from bot.db import repo
 from bot.db.models import Order, OrderStatus, status_ru
-from bot.keyboards.callbacks import AdminOrderCB
-from bot.keyboards.common import admin_order_kb, admin_panel_kb
+from bot.keyboards.callbacks import AdminOrderCB, ReviewAdminCB
+from bot.keyboards.common import admin_order_kb, admin_panel_kb, admin_review_kb
 from bot.states import AddProduct, AdminOrderInput
 from bot.utils.admin_ops import admin_transition
 from bot.utils.lifecycle import (
@@ -22,6 +22,7 @@ from bot.utils.lifecycle import (
 )
 from bot.utils.money import fmt, symbol
 from bot.utils.notify import history_lines, order_text, send_admin_order
+from bot.utils.reviews import admin_review_text
 from bot.utils.text import esc, local_time
 
 router = Router(name="admin")
@@ -323,3 +324,27 @@ async def set_product_photo(message: Message, session: AsyncSession) -> None:
 async def set_product_photo_hint(message: Message) -> None:
     # Команда пришла текстом, без снимка — иначе её молча съел бы поиск по каталогу.
     await message.answer("Пришлите фото с подписью <code>/photo 12</code>, где 12 — номер товара.")
+
+
+@router.callback_query(ReviewAdminCB.filter())
+async def review_visibility(call: CallbackQuery, callback_data: ReviewAdminCB, session: AsyncSession) -> None:
+    review = await repo.set_review_hidden(session, callback_data.review_id, callback_data.hide)
+    if review is None:
+        await call.answer("Отзыв не найден", show_alert=True)
+        return
+    await repo.log_action(
+        session, call.from_user.id, "review_hide" if review.is_hidden else "review_show",
+        f"review#{review.id}", f"product#{review.product_id}",
+    )
+    await call.answer("Скрыт с витрины" if review.is_hidden else "Снова на витрине")
+    product = await repo.product(session, review.product_id)
+    text = admin_review_text(review, product.title if product else f"товар #{review.product_id}")
+    try:
+        if call.message.photo:
+            await call.message.edit_caption(caption=text, reply_markup=admin_review_kb(review))
+        else:
+            await call.message.edit_text(text, reply_markup=admin_review_kb(review))
+    except Exception as e:
+        # Второй админ уже нажал ту же кнопку — Telegram отвечает «message is
+        # not modified». Само действие от этого не отменяется.
+        log.info("Сообщение об отзыве #%s не обновлено: %s", review.id, e)

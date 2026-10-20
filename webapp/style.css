@@ -385,6 +385,8 @@ body {
 }
 
 .sums { padding: 16px 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+.sums--cart { padding-top: 4px; gap: 6px; }
+.sums-caption { font-size: 13px; color: var(--hint); }
 .sum-row { display: flex; justify-content: space-between; gap: 12px; color: var(--hint); font-size: 14px; }
 .sum-row--total {
   margin-top: 6px;
@@ -531,3 +533,40 @@ html.fullscreen .ai-fab {
 
 /* Выдача поиска и избранное идут без вкладок, отступ им давали именно вкладки. */
 .grid--flat { margin-top: 12px; }
+
+/* Отзывы. Звёзды цветом кнопки темы, а не жёлтым: в тёмной теме Telegram
+   жёлтый на сером читается хуже, а акцент темы всегда контрастный. */
+.rating { font-size: 13px; color: var(--hint); }
+.rating--card { font-size: 12px; margin-top: 2px; }
+.rating--row { font-size: 12px; }
+.section-title--inner { padding: 20px 0 8px; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.section-title--inner .rating { text-transform: none; }
+.reviews { margin-bottom: 16px; }
+.reviews .hint, .review-form .hint { font-size: 13px; color: var(--hint); }
+.review { padding: 12px 0; border-top: 1px solid var(--secondary-bg); }
+.review-head { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.review-stars { color: var(--button); letter-spacing: 1px; }
+.review-author { font-weight: 600; }
+.review-date { margin-left: auto; color: var(--hint); font-size: 12px; }
+.review-text { margin-top: 6px; font-size: 14px; line-height: 1.45; white-space: pre-line; overflow-wrap: anywhere; }
+.review-photo { margin-top: 8px; max-width: 160px; max-height: 160px; border-radius: 10px; object-fit: cover; display: block; }
+.review-demo { margin-top: 4px; font-size: 11px; color: var(--hint); }
+
+.order-line--review { display: flex; align-items: center; gap: 8px; }
+.review-form { margin: 8px 0; padding: 12px; border-radius: var(--radius); background: var(--secondary-bg); display: flex; flex-direction: column; gap: 8px; }
+.review-form-title { font-size: 14px; font-weight: 600; }
+.star-pick { display: flex; gap: 4px; }
+.star { border: none; background: none; padding: 2px 4px; font-size: 28px; line-height: 1; color: var(--hint); opacity: .45; cursor: pointer; }
+.star--on { color: var(--button); opacity: 1; }
+.review-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+  width: 100%;
+  resize: vertical;
+}
+.review-input:focus { outline: none; border-color: var(--button); }
+.chip[disabled] { opacity: .5; }
