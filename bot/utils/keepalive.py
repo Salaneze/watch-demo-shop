@@ -80,8 +80,9 @@ async def run_keepalive(url: str, interval: float,
         # Сон первым: сразу после старта сервис и так бодр.
         await asyncio.sleep(interval)
         # Вне окна цикл молчит, и через 15 минут Render усыпляет контейнер целиком.
-        # Утром будить некому: процесса нет, проснётся от первого посетителя и
-        # дальше держится сам. Поэтому окно — «не дать уснуть», а не будильник.
+        # Изнутри утром будить некому: процесса нет. Будит GitHub Actions
+        # (.github/workflows/wake.yml, 08:00 МСК), дальше держит этот цикл.
+        # Меняешь окно — поправь cron там же.
         if not awake(window):
             continue
         status = await ping_once(url)
