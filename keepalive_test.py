@@ -93,6 +93,54 @@ async def main():
         started.cancel()
         await asyncio.gather(started, return_exceptions=True)
 
+    print("\n[6] Окно часов")
+    from datetime import datetime, timezone
+    check("пусто — круглосуточно", keepalive.parse_hours("") is None)
+    check("0-24 — круглосуточно", keepalive.parse_hours("0-24") is None)
+    check("8-24 разобрано", keepalive.parse_hours(" 8-24 ") == (8, 24))
+    for bad in ("8", "8-8", "25-3", "a-b", "8-24-1", "-1-5"):
+        try:
+            keepalive.parse_hours(bad)
+            check(f"{bad!r} отвергнут", False)
+        except ValueError:
+            check(f"{bad!r} отвергнут", True)
+
+    def at(h_utc, m=0):
+        return datetime(2026, 10, 19, h_utc, m, tzinfo=timezone.utc)
+    w = (8, 24)
+    # граница по Москве: 05:00 UTC = 08:00 МСК
+    check("07:59 МСК спит", not keepalive.awake(w, at(4, 59)))
+    check("08:00 МСК бодр", keepalive.awake(w, at(5, 0)))
+    check("23:59 МСК бодр", keepalive.awake(w, at(20, 59)))
+    check("00:00 МСК спит", not keepalive.awake(w, at(21, 0)))
+    night = (22, 6)
+    check("через полночь: 23 МСК бодр", keepalive.awake(night, at(20)))
+    check("через полночь: 03 МСК бодр", keepalive.awake(night, at(0)))
+    check("через полночь: 12 МСК спит", not keepalive.awake(night, at(9)))
+    check("без окна бодр всегда", keepalive.awake(None, at(0)))
+
+    print("\n[7] Вне окна цикл не стучится")
+    hits = []
+    base, runner = await serve(hits)
+    real_awake = keepalive.awake
+    keepalive.awake = lambda window, now=None: False
+    task = asyncio.create_task(keepalive.run_keepalive(base + "/healthz", 0.1, (8, 24)))
+    await asyncio.sleep(0.35)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    keepalive.awake = real_awake
+    await runner.cleanup()
+    check("ни одного пинга", hits == [], hits)
+
+    print("\n[8] Кривое окно роняет старт")
+    settings.keepalive_hours = "утро"
+    try:
+        keepalive.start_keepalive()
+        check("ValueError на старте", False)
+    except ValueError:
+        check("ValueError на старте", True)
+    settings.keepalive_hours = "8-24"
+
     print(f"\nOK: {ok} FAIL: {fail}")
     return 1 if fail else 0
 
