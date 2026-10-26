@@ -22,6 +22,7 @@ from api.schemas import (
     AiIn,
     AiOut,
     AiStatus,
+    AskPhotoOut,
     CartLine,
     CartOut,
     CartPatch,
@@ -66,7 +67,9 @@ from bot.utils.lifecycle import (
     apply_transition,
     is_final,
 )
+from bot.utils import ask_photo
 from bot.utils.money import fmt
+from bot.utils.niche import about_lines, spec_hints
 from bot.utils.reviews import notify_admins_review
 from bot.utils.seed import seed_art_path
 from bot.utils.share import product_link, share_result
@@ -173,6 +176,7 @@ def _product_out(p: Product, favorites: set[int] | None = None,
         # У товаров, заведённых до появления характеристик, поля просто нет —
         # карточка тогда обходится без таблицы, а не падает.
         specs=[[str(k), str(v)] for k, v in (p.specs or [])],
+        spec_hints=spec_hints(p.specs or []),
         is_favorite=bool(favorites and p.id in favorites),
         rating=rating,
         reviews_count=count,
@@ -232,7 +236,8 @@ async def catalog(request: Request, session: Session, q: str = "",
             CategoryOut(id=c.id, title=c.title, products=[_product_out(p, stats=stats) for p in products])
         )
     return CatalogOut(currency=settings.currency.upper(), categories=out,
-                      bot=getattr(request.app.state, "bot_username", None))
+                      bot=getattr(request.app.state, "bot_username", None),
+                      about=about_lines())
 
 
 @router.get("/delivery", response_model=list[DeliveryOut])
@@ -631,6 +636,29 @@ async def share_product(product_id: int, request: Request, user: CurrentUser,
             log.warning("Поделиться товаром %s не вышло: %s", product.id, exc2)
             raise HTTPException(status_code=502, detail="Telegram не принял сообщение")
     return ShareOut(id=prepared.id)
+
+
+@router.post("/ask-photo/{product_id}", response_model=AskPhotoOut)
+async def ask_live_photo(product_id: int, request: Request, user: CurrentUser,
+                         session: Session) -> AskPhotoOut:
+    """Покупатель просит живое фото товара — уходит админам в бот.
+
+    Кто просит, берём из подписи, а не из тела: иначе можно было бы слать
+    админу просьбы от чужого имени, и фото ушло бы постороннему.
+    """
+    product = await repo.product(session, product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    bot = getattr(request.app.state, "bot", None)
+    if bot is None:
+        raise HTTPException(status_code=503, detail="Бот сейчас недоступен")
+    if not ask_photo.should_ask(user.id, product.id):
+        return AskPhotoOut(sent=False)
+    text = ask_photo.ask_text(user.id, user.username, user.full_name, product.id, product.title)
+    if not await ask_photo.notify_admins_ask(bot, text):
+        ask_photo.forget(user.id, product.id)
+        raise HTTPException(status_code=502, detail="Менеджер сейчас недоступен, попробуйте позже")
+    return AskPhotoOut(sent=True)
 
 
 # ---------- ИИ-консультант ----------

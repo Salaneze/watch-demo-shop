@@ -135,17 +135,37 @@ body {
 .stock--low { color: var(--destructive); }
 
 .specs { display: flex; flex-direction: column; }
+.spec-item { border-bottom: 1px solid var(--separator); }
+.spec-item:last-child { border-bottom: none; }
 .spec {
   display: flex;
   justify-content: space-between;
   gap: 12px;
   padding: 9px 0;
-  border-bottom: 1px solid var(--separator);
   font-size: 14px;
 }
-.spec:last-child { border-bottom: none; }
+summary.spec { cursor: pointer; list-style: none; }
+summary.spec::-webkit-details-marker { display: none; }
 .spec-key { color: var(--hint); }
 .spec-val { text-align: right; }
+/* Пунктир — общепринятый знак «тут есть пояснение», без лишних иконок. */
+.spec-val--term { text-decoration: underline dotted var(--hint); text-underline-offset: 3px; }
+.spec-hint { font-size: 13px; color: var(--hint); line-height: 1.45; padding: 0 0 10px; }
+
+.ask-photo { align-self: flex-start; }
+.ask-note { font-size: 13px; color: var(--hint); }
+
+.about {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px 4px;
+  font-size: 12px;
+  color: var(--hint);
+  text-align: center;
+  line-height: 1.5;
+}
+.about-title { font-weight: 600; color: var(--text); font-size: 13px; }
 
 .fineprint { font-size: 12px; color: var(--hint); text-align: center; line-height: 1.5; }
 

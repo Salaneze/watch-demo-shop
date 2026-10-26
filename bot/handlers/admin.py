@@ -3,7 +3,7 @@ import logging
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
@@ -13,6 +13,7 @@ from bot.keyboards.callbacks import AdminOrderCB, ReviewAdminCB
 from bot.keyboards.common import admin_order_kb, admin_panel_kb, admin_review_kb
 from bot.states import AddProduct, AdminOrderInput
 from bot.utils.admin_ops import admin_transition
+from bot.utils.ask_photo import parse_marker
 from bot.utils.lifecycle import (
     CANCEL_REASON_MAX,
     InvalidTransition,
@@ -23,6 +24,7 @@ from bot.utils.lifecycle import (
 from bot.utils.money import fmt, symbol
 from bot.utils.notify import history_lines, order_text, send_admin_order
 from bot.utils.reviews import admin_review_text
+from bot.utils.share import product_link
 from bot.utils.text import esc, local_time
 
 router = Router(name="admin")
@@ -348,3 +350,41 @@ async def review_visibility(call: CallbackQuery, callback_data: ReviewAdminCB, s
         # Второй админ уже нажал ту же кнопку — Telegram отвечает «message is
         # not modified». Само действие от этого не отменяется.
         log.info("Сообщение об отзыве #%s не обновлено: %s", review.id, e)
+
+
+@router.message(F.reply_to_message, F.photo | F.video)
+async def answer_photo_request(message: Message, bot: Bot, session: AsyncSession) -> None:
+    """Ответ фото на «Просят живое фото» уходит покупателю от имени бота.
+
+    Метку читаем только из сообщения самого бота: иначе админ, ответивший на
+    пересланный кем-то текст с подставной меткой, отправил бы фото чужому.
+    """
+    replied = message.reply_to_message
+    target = parse_marker(replied.text) if replied.from_user and replied.from_user.id == bot.id else None
+    if target is None:
+        return
+    user_id, product_id = target
+    product = await repo.product(session, product_id)
+    title = product.title if product else f"товар #{product_id}"
+    caption = f"📷 Живое фото по вашей просьбе: <b>{esc(title)}</b>"
+    if message.caption:
+        caption += f"\n\n{esc(message.caption)}"
+    me = await bot.me()
+    kb = None
+    if product and product.is_active and me.username:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Открыть товар", url=product_link(me.username, product.id)),
+        ]])
+    try:
+        await bot.copy_message(user_id, message.chat.id, message.message_id,
+                               caption=caption[:1024], reply_markup=kb)
+    except Exception as e:
+        # Покупатель заблокировал бота или пришёл из витрины, ни разу не нажав
+        # /start. Админу остаётся написать ему напрямую по ссылке из просьбы.
+        log.info("Живое фото покупателю %s не доставлено: %s", user_id, e)
+        await message.reply("Не доставлено: покупатель закрыл личку с ботом. "
+                            "Напишите ему по ссылке в просьбе.")
+        return
+    await repo.log_action(session, message.from_user.id, "live_photo",
+                          f"product#{product_id}", f"user#{user_id}")
+    await message.reply("Отправлено покупателю ✅")

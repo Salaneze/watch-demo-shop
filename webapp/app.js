@@ -35,6 +35,7 @@ const state = {
   reviews: {},                // id товара -> отзывы; undefined — ещё не грузили
   related: {},                // 'p<id>' | 'cart' -> { from_orders, products } или 'loading'
   reviewForm: null,           // { order_id, product_id, rating, text } — открытая форма в заказах
+  askedPhoto: new Map(),      // id товара -> текст вместо кнопки «Запросить живое фото»
   notice: '',                 // нейтральное сообщение над экраном (не ошибка)
 };
 
@@ -468,7 +469,7 @@ function screenCatalog() {
     })));
 
   const grid = el('div', { class: 'grid' }, active.products.map(productCard));
-  return [...head, tabs, grid];
+  return [...head, tabs, grid, aboutBlock()];
 }
 
 function gallery(p) {
@@ -615,11 +616,7 @@ function screenProduct() {
   }
 
   const specs = (p.specs || []).length
-    ? el('div', { class: 'specs' }, p.specs.map(([k, v]) =>
-        el('div', { class: 'spec' }, [
-          el('span', { class: 'spec-key', text: k }),
-          el('span', { class: 'spec-val', text: v }),
-        ])))
+    ? el('div', { class: 'specs' }, p.specs.map(([k, v], i) => specRow(k, v, (p.spec_hints || [])[i])))
     : null;
 
   return [
@@ -633,14 +630,64 @@ function screenProduct() {
       inlineAdd,
       p.description ? el('p', { text: p.description }) : null,
       specs,
+      askPhotoButton(p),
       relatedBlock(`p${p.id}`, 'Дополнит покупку'),
       reviewsBlock(p),
-      el('div', { class: 'fineprint' }, [
-        el('div', { text: 'Доставка по стране 2–5 дней · гарантия 24 месяца' }),
-        el('div', { text: 'Витрина-образец: товары вымышленные, деньги не списываются' }),
-      ]),
+      aboutBlock(),
     ]),
   ];
+}
+
+/* Строка характеристик. С подсказкой — нативный <details>: раскрывается тапом
+   без своего JS и читается скринридером как кнопка. Всплывающий тултип на
+   телефоне не работает: наведения там нет. */
+function specRow(k, v, hint) {
+  const row = [
+    el('span', { class: 'spec-key', text: k }),
+    el('span', { class: `spec-val${hint ? ' spec-val--term' : ''}`, text: v }),
+  ];
+  if (!hint) return el('div', { class: 'spec-item' }, [el('div', { class: 'spec' }, row)]);
+  return el('details', { class: 'spec-item' }, [
+    el('summary', { class: 'spec' }, row),
+    el('div', { class: 'spec-hint', text: hint }),
+  ]);
+}
+
+/* «Запросить живое фото»: просьба уходит админу в бот, фото придёт покупателю
+   туда же. Без входа и без бота просить некому — кнопки нет. */
+function askPhotoButton(p) {
+  if (!state.authorized || !state.catalog?.bot) return null;
+  const done = state.askedPhoto.get(p.id);
+  if (done) return el('div', { class: 'ask-note', text: done });
+  return el('button', {
+    class: 'chip ask-photo',
+    text: '📷 Запросить живое фото',
+    onclick: async (e) => {
+      e.currentTarget.disabled = true;
+      haptic();
+      try {
+        const { sent } = await api(`/ask-photo/${p.id}`, { method: 'POST' });
+        state.askedPhoto.set(p.id, sent
+          ? 'Запрос у менеджера — фото придёт в чат с ботом'
+          : 'Уже просили недавно — фото придёт в чат с ботом');
+      } catch (err) {
+        if (err.status === 401) { startLogin(); return; }
+        state.askedPhoto.set(p.id, err.message || 'Не получилось, попробуйте позже');
+      }
+      render();
+    },
+  });
+}
+
+/* «О магазине»: строки приходят с сервера из настройки ниши. В клиентском
+   магазине без своего текста блока нет вовсе — лучше пусто, чем чужая гарантия. */
+function aboutBlock() {
+  const lines = state.catalog?.about || [];
+  if (!lines.length) return null;
+  return el('div', { class: 'about' }, [
+    el('div', { class: 'about-title', text: 'О магазине' }),
+    ...lines.map(t => el('div', { class: 'about-line', text: t })),
+  ]);
 }
 
 /* ---------- поделиться товаром ---------- */

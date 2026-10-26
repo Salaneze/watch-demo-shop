@@ -26,6 +26,8 @@ class ProductOut(BaseModel):
     # -1 = продаём без учёта остатка, тогда витрина про наличие ничего не пишет.
     stock: int
     specs: list[list[str]]
+    # Пояснение к строке характеристик той же позиции, None — термин обычный.
+    spec_hints: list[str | None] = []
     is_favorite: bool = False
     # None — оценок нет; витрина тогда не рисует звёзды вовсе, а не «0.0».
     rating: float | None = None
@@ -43,6 +45,13 @@ class CatalogOut(BaseModel):
     categories: list[CategoryOut]
     # username бота для ссылок «Поделиться»; None — бот не запущен (локальный API)
     bot: str | None = None
+    # Блок «О магазине» под каталогом; пусто — блока нет.
+    about: list[str] = []
+
+
+class AskPhotoOut(BaseModel):
+    # False — эту просьбу уже отправляли недавно, админа повторно не дёргаем.
+    sent: bool
 
 
 class ShareOut(BaseModel):
