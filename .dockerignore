@@ -1,0 +1,22 @@
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+specs
+tools
+branding
+deploy
+*_test.py
+run_tests.py
+ai_eval.py
+pg_check.py
+# кэш фото с локальных прогонов; рисунки каталога копируются явно
+media
+!media/seed

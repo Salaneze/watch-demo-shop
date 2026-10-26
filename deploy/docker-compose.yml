@@ -1,0 +1,59 @@
+# Магазин на своём VPS: бот + витрина, Postgres и Caddy (HTTPS сам).
+# Запуск из папки deploy: docker compose up -d --build
+# Секреты — в deploy/.env (образец рядом, .env.vps.example).
+services:
+  shop:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_URL: postgresql://shop:${POSTGRES_PASSWORD}@db:5432/shop
+      # Снаружи только Caddy, он и подставляет реальный IP покупателя.
+      TRUST_PROXY: "true"
+      USE_WEBHOOK: "true"
+      WEBAPP_URL: https://${DOMAIN}
+      # VPS не засыпает — самопинг здесь только лишний трафик.
+      KEEPALIVE_MINUTES: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Порт наружу не публикуем: в контейнер ходит только Caddy по сети compose.
+    expose:
+      - "8080"
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shop
+      POSTGRES_DB: shop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop -d shop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Сертификаты Let's Encrypt: без тома каждый рестарт выпускает новый
+      # и через пару дней упирается в лимит выдачи.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - shop
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

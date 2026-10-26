@@ -91,6 +91,18 @@ python -m api
 Развёртывание на Render описано в [`render.yaml`](render.yaml) — сервис
 поднимается из репозитория без ручной настройки в панели.
 
+На своём VPS — Docker: бот с витриной, Postgres и Caddy, который сам получает
+HTTPS-сертификат. Нужен домен с A-записью на IP сервера:
+
+```
+cd deploy
+cp .env.vps.example .env   # домен, пароль базы, BOT_TOKEN, ADMIN_IDS
+docker compose up -d --build
+```
+
+Обновление — `git pull && docker compose up -d --build`, база живёт в томе
+и пересборку переживает.
+
 ## Тесты
 
 Тесты — самостоятельные скрипты без зависимости от тестового фреймворка,

@@ -1,0 +1,9 @@
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy shop:8080 {
+		# Ограничитель частоты верит CF-Connecting-IP раньше X-Forwarded-For.
+		# Cloudflare перед этим сервером нет, значит заголовок прислал сам
+		# клиент — и менял бы его на каждый запрос, обходя лимит. Срезаем.
+		header_up -CF-Connecting-IP
+	}
+}
