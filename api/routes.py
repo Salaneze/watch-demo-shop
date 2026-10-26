@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,7 @@ from api.schemas import (
     RepeatOut,
     ReviewIn,
     ReviewOut,
+    ShareOut,
     StatusEntryOut,
 )
 from api.session import deep_link, issue_token, read_token
@@ -67,6 +69,7 @@ from bot.utils.lifecycle import (
 from bot.utils.money import fmt
 from bot.utils.reviews import notify_admins_review
 from bot.utils.seed import seed_art_path
+from bot.utils.share import product_link, share_result
 
 router = APIRouter(prefix="/api")
 log = logging.getLogger(__name__)
@@ -202,7 +205,8 @@ async def auth_poll(code: str) -> LoginPoll:
 
 
 @router.get("/catalog", response_model=CatalogOut)
-async def catalog(session: Session, q: str = "", sort: str = repo.DEFAULT_SORT) -> CatalogOut:
+async def catalog(request: Request, session: Session, q: str = "",
+                  sort: str = repo.DEFAULT_SORT) -> CatalogOut:
     """Каталог открыт без подписи намеренно.
 
     Товары и цены и так видит любой, кто написал боту, — секрета в них нет.
@@ -227,7 +231,8 @@ async def catalog(session: Session, q: str = "", sort: str = repo.DEFAULT_SORT) 
         out.append(
             CategoryOut(id=c.id, title=c.title, products=[_product_out(p, stats=stats) for p in products])
         )
-    return CatalogOut(currency=settings.currency.upper(), categories=out)
+    return CatalogOut(currency=settings.currency.upper(), categories=out,
+                      bot=getattr(request.app.state, "bot_username", None))
 
 
 @router.get("/delivery", response_model=list[DeliveryOut])
@@ -590,6 +595,42 @@ async def cart_related(user: CurrentUser, session: Session) -> RelatedOut:
     found, from_orders = await repo.related_products(session, ids)
     stats = await repo.rating_stats(session)
     return RelatedOut(from_orders=from_orders, products=[_product_out(p, stats=stats) for p in found])
+
+
+@router.post("/share/{product_id}", response_model=ShareOut)
+async def share_product(product_id: int, request: Request, user: CurrentUser,
+                        session: Session) -> ShareOut:
+    """Сообщение с товаром, которое покупатель отправит из витрины в свой чат.
+
+    Сохраняется на того, кто подписан initData, — id из тела запроса тут не
+    принимается: чужим id можно было бы засорять чужие окна «Поделиться».
+    """
+    product = await repo.product(session, product_id)
+    if product is None or not product.is_active:
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    bot = getattr(request.app.state, "bot", None)
+    username = getattr(request.app.state, "bot_username", None)
+    if bot is None or not username:
+        raise HTTPException(status_code=503, detail="Поделиться сейчас нельзя")
+
+    link = product_link(username, product.id)
+    image = _image_url(product)
+    photo_url = f"{settings.public_url}{image}" if image and settings.has_webapp else None
+    kw = dict(user_id=user.id, allow_user_chats=True, allow_group_chats=True,
+              allow_channel_chats=True)
+    try:
+        prepared = await bot.save_prepared_inline_message(
+            result=share_result(product, link, photo_url), **kw)
+    except TelegramBadRequest as exc:
+        # Обычно это демо-PNG по ссылке: без фото, зато с рабочей кнопкой.
+        log.warning("Поделиться товаром %s с фото не вышло: %s", product.id, exc)
+        try:
+            prepared = await bot.save_prepared_inline_message(
+                result=share_result(product, link, None, plain=True), **kw)
+        except TelegramAPIError as exc2:
+            log.warning("Поделиться товаром %s не вышло: %s", product.id, exc2)
+            raise HTTPException(status_code=502, detail="Telegram не принял сообщение")
+    return ShareOut(id=prepared.id)
 
 
 # ---------- ИИ-консультант ----------

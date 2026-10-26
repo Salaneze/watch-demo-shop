@@ -319,6 +319,7 @@ body {
 }
 /* Запасная «Добавить ещё» для клиентов без второй нижней кнопки Telegram. */
 .add-more { margin: 4px 0 12px; }
+.share-row { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip--on { background: var(--button); color: var(--button-text); border-color: var(--button); }
 
 .heart {

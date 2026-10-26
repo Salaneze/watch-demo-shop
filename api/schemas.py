@@ -41,6 +41,13 @@ class CategoryOut(BaseModel):
 class CatalogOut(BaseModel):
     currency: str
     categories: list[CategoryOut]
+    # username бота для ссылок «Поделиться»; None — бот не запущен (локальный API)
+    bot: str | None = None
+
+
+class ShareOut(BaseModel):
+    # id сохранённого сообщения для Telegram.WebApp.shareMessage
+    id: str
 
 
 class DeliveryOut(BaseModel):

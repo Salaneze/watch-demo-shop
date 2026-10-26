@@ -628,6 +628,7 @@ function screenProduct() {
       el('h1', { text: p.title }),
       el('div', { class: 'price', text: p.price_text }),
       ratingBadge(p.rating, p.reviews_count),
+      shareRow(p),
       note ? el('div', { class: `stock${note.low ? ' stock--low' : ''}`, text: note.text }) : null,
       inlineAdd,
       p.description ? el('p', { text: p.description }) : null,
@@ -640,6 +641,68 @@ function screenProduct() {
       ]),
     ]),
   ];
+}
+
+/* ---------- поделиться товаром ---------- */
+
+function productLink(p) {
+  return state.catalog?.bot ? `https://t.me/${state.catalog.bot}?startapp=p${p.id}` : '';
+}
+
+/* Готовое сообщение с фото и кнопкой (Bot API 8.0) сохраняет сервер: только бот
+   может положить его на имя покупателя. На старом клиенте, без входа или если
+   сервер не смог — обычная ссылка через окно «Поделиться» самого Telegram. */
+async function shareProduct(p) {
+  haptic();
+  if (state.authorized && supports('8.0') && tg?.shareMessage) {
+    try {
+      const { id } = await api(`/share/${p.id}`, { method: 'POST' });
+      tg.shareMessage(id);
+      return;
+    } catch { /* ниже запасной путь */ }
+  }
+  const link = productLink(p);
+  if (!link) return;
+  const url = `https://t.me/share/url?url=${encodeURIComponent(link)}` +
+              `&text=${encodeURIComponent(`${p.title} — ${p.price_text}`)}`;
+  tg?.openTelegramLink ? tg.openTelegramLink(url) : window.open(url, '_blank');
+}
+
+/* Ссылку-виджет в сторис Telegram оставляет только Premium; у остальных
+   сторис выйдет с фото и подписью — товар всё равно виден. */
+function shareStory(p) {
+  haptic();
+  const link = productLink(p);
+  tg.shareToStory(new URL(p.image, location.origin).href, {
+    text: `${p.title} — ${p.price_text}`.slice(0, 200),
+    ...(link ? { widget_link: { url: link, name: 'Открыть в магазине' } } : {}),
+  });
+}
+
+function shareRow(p) {
+  // Вне Telegram делиться нечем: ссылка t.me ведёт в клиент, которого тут нет.
+  // SDK живёт и в обычном браузере, отличает его только platform 'unknown'.
+  if (!tg || tg.platform === 'unknown' || !productLink(p)) return null;
+  const story = p.image && supports('7.8') && tg.shareToStory;
+  return el('div', { class: 'share-row' }, [
+    el('button', { class: 'chip', text: '↗ Поделиться', onclick: () => shareProduct(p) }),
+    story ? el('button', { class: 'chip', text: 'В сторис', onclick: () => shareStory(p) }) : null,
+  ]);
+}
+
+/* t.me/бот?startapp=p<id> из «Поделиться» открывает витрину сразу на товаре.
+   Снятый с продажи в каталоге не найдётся — тогда просто главная. */
+function startProduct() {
+  const param = tg?.initDataUnsafe?.start_param
+    || new URLSearchParams(location.search).get('tgWebAppStartParam') || '';
+  const m = /^p(\d+)$/.exec(param);
+  if (!m) return null;
+  const id = Number(m[1]);
+  for (const c of state.catalog?.categories || []) {
+    const p = c.products.find(x => x.id === id);
+    if (p) return p;
+  }
+  return null;
 }
 
 async function patchCart(productId, delta) {
@@ -1475,6 +1538,8 @@ async function boot() {
   if (user) {
     state.form.name = [user.first_name, user.last_name].filter(Boolean).join(' ');
   }
+  const shared = startProduct();
+  if (shared) { openProduct(shared); return; }
   render();
 }
 
