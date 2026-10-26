@@ -275,3 +275,19 @@ class ReviewAsk(Base):
 
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class CartNudge(Base):
+    """Когда корзина менялась последний раз и напоминал ли о ней бот.
+
+    Отдельно от cart_items по той же причине, что ReviewAsk: колонку времени
+    в живую таблицу на Postgres create_all не добавит.
+    """
+
+    __tablename__ = "cart_nudges"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    touched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # Одно напоминание на корзину: сбрасывается заказом или очисткой корзины.
+    reminded: Mapped[bool] = mapped_column(Boolean, default=False)
+    opted_out: Mapped[bool] = mapped_column(Boolean, default=False)

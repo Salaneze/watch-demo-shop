@@ -122,6 +122,18 @@ def cart_kb(items: list[CartItem]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def cart_nudge_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    if settings.has_webapp:
+        kb.row(InlineKeyboardButton(text="🛍 Открыть витрину",
+                                    web_app=WebAppInfo(url=settings.public_url)))
+    kb.row(InlineKeyboardButton(text="🛒 Корзина в чате", callback_data=CartCB(action="open").pack()))
+    # Отписка рядом с самим напоминанием, а не в настройках: иначе её не найдут
+    # и просто заблокируют бота — тогда не дойдут и статусы заказов.
+    kb.row(InlineKeyboardButton(text="🔕 Не напоминать", callback_data=CartCB(action="mute").pack()))
+    return kb.as_markup()
+
+
 def delivery_kb() -> InlineKeyboardMarkup:
     """Способы доставки с ценами. Код способа уезжает в callback_data, цена —
     только в подписи: считать её всё равно будет сервер."""

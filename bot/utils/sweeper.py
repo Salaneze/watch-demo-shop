@@ -1,4 +1,5 @@
-"""Фоновые дела магазина: автоотмена неоплаченных и просьбы об отзыве.
+"""Фоновые дела магазина: автоотмена неоплаченных, просьбы об отзыве и
+напоминание о брошенной корзине.
 
 Один процесс, одна БД — планировщик поверх asyncio.sleep тут лишний.
 Первая проверка идёт сразу при старте: на засыпающем хостинге сервер мог
@@ -14,6 +15,7 @@ from aiogram import Bot
 
 from bot.config import settings
 from bot.db.base import session_factory
+from bot.utils.cart_nudge import nudge_carts_once
 from bot.utils.lifecycle import expire_unpaid
 from bot.utils.notify import notify_customer_status, sync_admin_keyboards
 from bot.utils.reviews import ask_reviews_once
@@ -41,11 +43,20 @@ async def ask_once(bot: Bot) -> int:
     return sent
 
 
+async def nudge_once(bot: Bot) -> int:
+    async with session_factory() as session:
+        sent = await nudge_carts_once(bot, session)
+    if sent:
+        log.info("Напоминаний о корзине отправлено: %s", sent)
+    return sent
+
+
 async def run_sweeper(bot: Bot) -> None:
     while True:
         try:
             await sweep_once(bot)
             await ask_once(bot)
+            await nudge_once(bot)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -67,6 +78,11 @@ def start_sweeper(bot: Bot) -> asyncio.Task | None:
         log.info("Напоминание об отзыве выключено (REVIEW_ASK_DAYS=0)")
     else:
         log.info("Напоминание об отзыве: через %s дн. после выдачи", settings.review_ask_days)
-    if settings.unpaid_ttl_minutes <= 0 and settings.review_ask_days <= 0:
+    if settings.cart_remind_minutes <= 0:
+        log.info("Напоминание о корзине выключено (CART_REMIND_MINUTES=0)")
+    else:
+        log.info("Напоминание о корзине: через %s мин тишины", settings.cart_remind_minutes)
+    if (settings.unpaid_ttl_minutes <= 0 and settings.review_ask_days <= 0
+            and settings.cart_remind_minutes <= 0):
         return None
     return asyncio.create_task(run_sweeper(bot), name="unpaid-sweeper")

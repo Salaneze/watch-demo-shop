@@ -9,6 +9,7 @@ from bot.db.models import (
     AdminOrderMessage,
     AuditLog,
     CartItem,
+    CartNudge,
     Category,
     Favorite,
     Order,
@@ -20,6 +21,7 @@ from bot.db.models import (
     Review,
     ReviewAsk,
     User,
+    utcnow,
 )
 from bot.utils.delivery import DEFAULT_DELIVERY, Totals, quote
 
@@ -230,22 +232,43 @@ async def cart_add(s: AsyncSession, user_id: int, product_id: int, delta: int = 
             return 0
         item = CartItem(user_id=user_id, product_id=product_id, qty=qty)
         s.add(item)
+        await _touch_cart(s, user_id)
         await s.commit()
         return qty
     item.qty += delta
     if item.qty <= 0:
         await s.delete(item)
+        await s.flush()
+        await _touch_cart(s, user_id, emptied=not await s.scalar(
+            select(CartItem.id).where(CartItem.user_id == user_id).limit(1)))
         await s.commit()
         return 0
     # Остаток мог уменьшиться уже после того, как товар попал в корзину.
     if limit is not None:
         item.qty = min(item.qty, limit)
+    await _touch_cart(s, user_id)
     await s.commit()
     return item.qty
 
 
+async def _touch_cart(s: AsyncSession, user_id: int, *, emptied: bool = False) -> None:
+    """Корзина изменилась: отсчёт до напоминания начинается заново.
+
+    Опустевшая корзина закрывает эпизод — следующая, собранная заново, снова
+    имеет право на одно напоминание. Без коммита: его делает вызывающий.
+    """
+    nudge = await s.get(CartNudge, user_id)
+    if nudge is None:
+        nudge = CartNudge(user_id=user_id)
+        s.add(nudge)
+    nudge.touched_at = utcnow()
+    if emptied:
+        nudge.reminded = False
+
+
 async def cart_clear(s: AsyncSession, user_id: int) -> None:
     await s.execute(delete(CartItem).where(CartItem.user_id == user_id))
+    await _touch_cart(s, user_id, emptied=True)
     await s.commit()
 
 
@@ -319,6 +342,7 @@ async def create_order(
     if taken.rowcount == 0:
         await s.rollback()
         raise ValueError("empty cart")
+    await _touch_cart(s, user_id, emptied=True)
 
     for i in items:
         if i.product.stock >= 0:
@@ -683,6 +707,43 @@ async def mark_review_asked(s: AsyncSession, order_id: int) -> bool:
     s.add(ReviewAsk(order_id=order_id))
     await s.commit()
     return True
+
+
+async def carts_to_nudge(s: AsyncSession, cutoff: datetime, floor: datetime) -> list[int]:
+    """Покупатели с непустой корзиной, нетронутой в окне [floor, cutoff).
+
+    Нижняя граница — чтобы первый запуск на живой базе и пробуждение после
+    долгого сна хостинга не напомнили о корзине недельной давности.
+    """
+    has_items = select(CartItem.user_id)
+    res = await s.scalars(
+        select(CartNudge.user_id)
+        .where(CartNudge.touched_at < cutoff, CartNudge.touched_at >= floor,
+               CartNudge.reminded.is_(False), CartNudge.opted_out.is_(False),
+               CartNudge.user_id.in_(has_items))
+        .order_by(CartNudge.touched_at)
+    )
+    return list(res)
+
+
+async def mark_cart_nudged(s: AsyncSession, user_id: int) -> bool:
+    """Отметить напоминание. False — уже отмечено (второй процесс успел раньше)."""
+    res = await s.execute(
+        update(CartNudge)
+        .where(CartNudge.user_id == user_id, CartNudge.reminded.is_(False))
+        .values(reminded=True)
+    )
+    await s.commit()
+    return res.rowcount == 1
+
+
+async def cart_nudge_opt_out(s: AsyncSession, user_id: int) -> None:
+    nudge = await s.get(CartNudge, user_id)
+    if nudge is None:
+        nudge = CartNudge(user_id=user_id)
+        s.add(nudge)
+    nudge.opted_out = True
+    await s.commit()
 
 
 async def repeat_order(s: AsyncSession, user_id: int, order_id: int) -> tuple[list[str], list[str]]:

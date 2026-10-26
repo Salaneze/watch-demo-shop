@@ -1,6 +1,6 @@
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db import repo
@@ -69,6 +69,18 @@ async def cart_clear(call: CallbackQuery, session: AsyncSession) -> None:
     text, kb = await render_cart(session, call.from_user.id)
     await call.answer("Корзина очищена")
     await call.message.edit_text(text, reply_markup=kb)
+
+
+@router.callback_query(CartCB.filter(F.action == "mute"))
+async def cart_mute(call: CallbackQuery, session: AsyncSession) -> None:
+    await repo.cart_nudge_opt_out(session, call.from_user.id)
+    await call.answer("Больше не напомню о корзине")
+    # Кнопки корзины и витрины оставляем — убираем только саму отписку.
+    kb = call.message.reply_markup
+    if kb:
+        rows = [r for r in kb.inline_keyboard
+                if not any(b.callback_data == CartCB(action="mute").pack() for b in r)]
+        await call.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(CartCB.filter(F.action == "open"))

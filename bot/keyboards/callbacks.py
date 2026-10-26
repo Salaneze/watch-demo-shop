@@ -11,7 +11,7 @@ class ProductCB(CallbackData, prefix="prod"):
 
 
 class CartCB(CallbackData, prefix="cart"):
-    action: str  # add | inc | dec | clear | open | checkout
+    action: str  # add | inc | dec | clear | open | checkout | mute
     product_id: int = 0
 
 
